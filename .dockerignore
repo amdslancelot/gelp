@@ -1,0 +1,29 @@
+# Dependencies and build output are regenerated inside the image; never send
+# them as build context (they can be large and stale).
+node_modules
+.next
+
+# Version control metadata is irrelevant to the image and can be large.
+.git
+
+# Local SQLite data must never be baked into the image; the app uses a
+# mounted volume at /data in production.
+data
+
+# Local secrets and environment files must never end up in the image.
+.env*
+
+# Deployment and infrastructure tooling are not part of the app image.
+deploy
+infra
+
+# Test files are not needed at runtime.
+test
+
+# Documentation is not needed at runtime.
+*.md
+
+# Local tooling/state files that sometimes live at the repo root.
+.upward*
+result.json
+run.log

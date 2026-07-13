@@ -1,0 +1,2 @@
+# Real secret values live only on the server; never commit them.
+20-secret.yaml

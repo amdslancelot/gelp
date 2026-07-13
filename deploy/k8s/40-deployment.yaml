@@ -1,0 +1,67 @@
+# Runs the Gelp app server. Image is built locally on the host and imported
+# straight into k3s's containerd (see deploy/deploy.sh), so imagePullPolicy
+# must be Never -- there is no registry to pull "gelp:latest" from.
+#
+# Replicas are pinned to 1 and the update strategy is Recreate rather than
+# RollingUpdate because the PVC below is ReadWriteOnce: a rolling update that
+# tried to bring up a second pod before killing the first would deadlock on
+# the volume attachment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gelp
+  namespace: gelp
+  labels:
+    app: gelp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gelp
+  template:
+    metadata:
+      labels:
+        app: gelp
+    spec:
+      containers:
+        - name: gelp
+          image: gelp:latest
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: gelp-env
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: gelp-data

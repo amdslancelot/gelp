@@ -1,0 +1,8 @@
+node_modules
+.next
+data/
+.env*
+!.env.example
+test/fixtures/*.zip
+*.tsbuildinfo
+next-env.d.ts

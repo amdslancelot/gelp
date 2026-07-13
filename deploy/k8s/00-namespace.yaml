@@ -1,0 +1,6 @@
+# Dedicated namespace for all Gelp resources, so the whole app can be
+# inspected or torn down with `kubectl -n gelp ...` / `kubectl delete ns gelp`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gelp
