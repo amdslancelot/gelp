@@ -31,6 +31,16 @@ interface MapViewProps {
   focus: PlaceView | null;
 }
 
+// The saved Takeout URL is the real Google Maps pin; fall back to a
+// coordinate search when a place was only resolved via the Places API.
+function googleMapsUrlFor(place: PlaceView): string | null {
+  if (place.mapsUrl) return place.mapsUrl;
+  if (place.lat != null && place.lng != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}`;
+  }
+  return null;
+}
+
 // Keep the map framed to the visible markers, and pan to a focused place.
 function MapController({ places, focus }: MapViewProps) {
   const map = useMap();
@@ -65,18 +75,30 @@ export default function MapView({ places, focus }: MapViewProps) {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-      {withCoords.map((p) => (
-        <Marker
-          key={p.id}
-          position={[p.lat as number, p.lng as number]}
-          icon={icon}
-        >
-          <Popup>
-            <strong>{p.title}</strong>
-            {p.address && <div>{p.address}</div>}
-          </Popup>
-        </Marker>
-      ))}
+      {withCoords.map((p) => {
+        const mapsUrl = googleMapsUrlFor(p);
+        return (
+          <Marker
+            key={p.id}
+            position={[p.lat as number, p.lng as number]}
+            icon={icon}
+            eventHandlers={
+              mapsUrl
+                ? {
+                    click: () => {
+                      window.open(mapsUrl, "_blank", "noopener,noreferrer");
+                    },
+                  }
+                : undefined
+            }
+          >
+            <Popup>
+              <strong>{p.title}</strong>
+              {p.address && <div>{p.address}</div>}
+            </Popup>
+          </Marker>
+        );
+      })}
       <MapController places={places} focus={focus} />
     </MapContainer>
   );

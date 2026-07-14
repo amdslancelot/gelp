@@ -15,6 +15,7 @@ interface ImportResult {
 export default function Uploader() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -22,6 +23,8 @@ export default function Uploader() {
 
   const upload = useCallback(
     async (file: File) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       setError(null);
       setResult(null);
@@ -42,6 +45,7 @@ export default function Uploader() {
       } catch {
         setError("Upload failed");
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
@@ -53,21 +57,24 @@ export default function Uploader() {
       <div
         onDragOver={(e) => {
           e.preventDefault();
-          setDragOver(true);
+          if (!busy) setDragOver(true);
         }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
+          if (busy) return;
           const file = e.dataTransfer.files?.[0];
           if (file) upload(file);
         }}
-        onClick={() => inputRef.current?.click()}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
-          dragOver
-            ? "border-rose-400 bg-rose-50"
-            : "border-neutral-300 bg-white hover:bg-neutral-50"
-        }`}
+        onClick={() => {
+          if (!busy) inputRef.current?.click();
+        }}
+        className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
+          busy
+            ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
+            : "cursor-pointer border-neutral-300 bg-white hover:bg-neutral-50"
+        } ${dragOver ? "border-rose-400 bg-rose-50" : ""}`}
       >
         <p className="text-sm font-medium text-neutral-700">
           {busy ? "Importing…" : "Drop your Takeout zip here"}
@@ -78,6 +85,7 @@ export default function Uploader() {
           type="file"
           accept=".zip,application/zip"
           className="hidden"
+          disabled={busy}
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) upload(file);

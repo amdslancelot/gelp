@@ -47,9 +47,9 @@ export default function Browser({ lists }: { lists: ListView[] }) {
   }, [selectedList, category]);
 
   return (
-    <div className="grid flex-1 grid-cols-[240px_minmax(0,1fr)_minmax(0,1.2fr)] overflow-hidden">
+    <div className="grid flex-1 grid-cols-[240px_minmax(0,1fr)_minmax(0,1.2fr)] grid-rows-[auto_1fr] overflow-hidden">
       {/* Left column: the user's lists. */}
-      <aside className="overflow-y-auto border-r border-neutral-200 bg-white">
+      <aside className="row-span-2 overflow-y-auto border-r border-neutral-200 bg-white">
         <h2 className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-400">
           Lists
         </h2>
@@ -83,23 +83,25 @@ export default function Browser({ lists }: { lists: ListView[] }) {
         </ul>
       </aside>
 
+      {/* Filter bar: spans the places-list and map columns above both. */}
+      <div className="col-span-2 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-b border-neutral-200 bg-white px-4 py-2.5">
+        <Chip
+          label="All"
+          active={category === ALL}
+          onClick={() => setCategory(ALL)}
+        />
+        {categories.map((c) => (
+          <Chip
+            key={c}
+            label={humanizeCategory(c)}
+            active={category === c}
+            onClick={() => setCategory(c)}
+          />
+        ))}
+      </div>
+
       {/* Middle column: places in the selected list. */}
       <section className="flex flex-col overflow-hidden">
-        <div className="flex flex-wrap gap-1.5 border-b border-neutral-200 bg-white px-4 py-2.5">
-          <Chip
-            label="All"
-            active={category === ALL}
-            onClick={() => setCategory(ALL)}
-          />
-          {categories.map((c) => (
-            <Chip
-              key={c}
-              label={humanizeCategory(c)}
-              active={category === c}
-              onClick={() => setCategory(c)}
-            />
-          ))}
-        </div>
         <ul className="flex-1 overflow-y-auto divide-y divide-neutral-100">
           {visiblePlaces.map((p) => (
             <li key={p.id}>
@@ -158,7 +160,7 @@ function Chip({
   return (
     <button
       onClick={onClick}
-      className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+      className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
         active
           ? "border-rose-500 bg-rose-500 text-white"
           : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"

@@ -103,6 +103,7 @@ export async function runImport(
             types: null,
             fetchedAt: Date.now(),
           })
+          .onConflictDoNothing()
           .run();
       } else {
         // Resolve via the Places client and cache the outcome, including a
@@ -124,6 +125,7 @@ export async function runImport(
             types: found ? JSON.stringify(found.types) : null,
             fetchedAt: Date.now(),
           })
+          .onConflictDoNothing()
           .run();
       }
 
