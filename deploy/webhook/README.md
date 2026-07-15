@@ -3,16 +3,20 @@
 This directory configures [`adnanh/webhook`](https://github.com/adnanh/webhook)
 (v2.8+, required for the `payload-hmac-sha256` match type) to run
 `/opt/gelp/deploy/deploy.sh` whenever GitHub pushes to `main`. The systemd
-service that runs `webhook -hooks /opt/gelp/deploy/webhook/hooks.json -port
-9000` is set up by the server's cloud-init, not by this repo.
+service that runs `webhook -hooks /etc/webhook/hooks.json -port 9000` is
+installed by `deploy/setup-server.sh`; it runs against the *rendered* copy
+at `/etc/webhook/hooks.json` (real secret substituted in), never against
+the checked-in template here.
 
 ## `{{WEBHOOK_SECRET}}` placeholder
 
 `hooks.json` contains a `{{WEBHOOK_SECRET}}` placeholder in place of the real
-HMAC secret. Replace it with a real secret value (for example the output of
-`openssl rand -hex 32`) in the copy of this file that actually gets loaded by
-the `webhook` systemd service on the server; do not commit the real secret to
-this repository.
+HMAC secret. You normally don't touch it: `deploy/setup-server.sh`
+substitutes the `WEBHOOK_SECRET` value you pass it and writes the result to
+`/etc/webhook/hooks.json` on the server. Only if you set a server up without
+that script do you substitute a real secret (for example the output of
+`openssl rand -hex 32`) into the copy the `webhook` service loads — never
+into this checked-in file; the real secret must not be committed.
 
 ## Configuring the GitHub webhook
 

@@ -14,6 +14,10 @@ configuration that triggers it automatically.
   Service, Ingress, and the nightly import CronJob.
 - `deploy.sh` — idempotent build-and-deploy script; run by the webhook on
   every push to `main`, and safe to run by hand at any time.
+- `setup-server.sh` — one-time root bootstrap of an existing Oracle Linux 9
+  ARM host: packages, podman, k3s, the webhook systemd service, the repo
+  clone at `/opt/gelp`, and the first deploy. See section 4 of the root
+  README for the full walkthrough.
 - `webhook/` — `adnanh/webhook` configuration that runs `deploy.sh` when
   GitHub delivers a push event to `main`.
 
@@ -26,9 +30,10 @@ On the server (where the repo is checked out at `/opt/gelp`):
 ```
 
 This pulls the latest commit (if running inside a git checkout with an
-`origin` remote), installs cert-manager on first run, builds the Docker
-image, imports it into k3s's containerd, applies all manifests, and rolls
-out the new image, waiting until the Deployment reports healthy.
+`origin` remote), installs cert-manager on first run, builds the container
+image (with docker or podman, whichever is installed), imports it into
+k3s's containerd, applies all manifests, and rolls out the new image,
+waiting until the Deployment reports healthy.
 
 ## Creating the app secret
 

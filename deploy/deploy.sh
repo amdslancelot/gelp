@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# /opt/gelp/deploy.env is written by the Terraform cloud-init on the server
+# /opt/gelp/deploy.env is written by deploy/setup-server.sh on the server
 # and supplies GELP_HOST, LETSENCRYPT_EMAIL, and KUBECONFIG. It won't exist
 # when this script is run outside that server (e.g. a developer laptop), so
 # tolerate its absence rather than failing.
@@ -61,13 +61,31 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Build the image and import it directly into k3s's containerd, since
 #    there is no registry in this setup (imagePullPolicy: Never in the
-#    Deployment relies on the image already being present locally).
+#    Deployment relies on the image already being present locally). The
+#    build tool is auto-detected: docker on Ubuntu-style hosts, podman on
+#    RHEL-family hosts (e.g. Oracle Linux 9, where podman ships in the
+#    distro's own repos). podman needs --format docker-archive on save
+#    because its default oci-archive output is not what `ctr images import`
+#    expects for a docker-tagged image.
 # ---------------------------------------------------------------------------
-echo "==> Building gelp:latest"
-docker build -f deploy/Dockerfile -t gelp:latest .
+if command -v docker >/dev/null 2>&1; then
+  CONTAINER_TOOL=docker
+elif command -v podman >/dev/null 2>&1; then
+  CONTAINER_TOOL=podman
+else
+  echo "ERROR: neither docker nor podman found; install one to build the image" >&2
+  exit 1
+fi
+
+echo "==> Building gelp:latest with ${CONTAINER_TOOL}"
+"${CONTAINER_TOOL}" build -f deploy/Dockerfile -t gelp:latest .
 
 echo "==> Importing gelp:latest into k3s containerd"
-docker save gelp:latest | k3s ctr images import -
+if [ "${CONTAINER_TOOL}" = "podman" ]; then
+  podman save --format docker-archive gelp:latest | k3s ctr images import -
+else
+  docker save gelp:latest | k3s ctr images import -
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Apply Kubernetes manifests in numeric order. The ClusterIssuer and
@@ -80,6 +98,7 @@ echo "==> Applying Kubernetes manifests"
 
 kubectl apply -f "${SCRIPT_DIR}/k8s/00-namespace.yaml"
 
+# shellcheck disable=SC2016  # envsubst takes the ${VAR} names literally
 envsubst '${GELP_HOST} ${LETSENCRYPT_EMAIL}' < "${SCRIPT_DIR}/k8s/10-clusterissuer.yaml" | kubectl apply -f -
 
 if [ -f "${SCRIPT_DIR}/k8s/20-secret.yaml" ]; then
@@ -104,6 +123,7 @@ kubectl apply -f "${SCRIPT_DIR}/k8s/30-pvc.yaml"
 kubectl apply -f "${SCRIPT_DIR}/k8s/40-deployment.yaml"
 kubectl apply -f "${SCRIPT_DIR}/k8s/50-service.yaml"
 
+# shellcheck disable=SC2016  # envsubst takes the ${VAR} names literally
 envsubst '${GELP_HOST} ${LETSENCRYPT_EMAIL}' < "${SCRIPT_DIR}/k8s/60-ingress.yaml" | kubectl apply -f -
 
 kubectl apply -f "${SCRIPT_DIR}/k8s/70-cronjob.yaml"

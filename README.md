@@ -9,8 +9,7 @@ Google offers no API for saved lists, so Gelp imports a **Google Takeout "Saved"
 | Layer | Where | What |
 |---|---|---|
 | App | repo root (`app/`, `lib/`, …) | Next.js 15 (App Router, standalone output), NextAuth v5 Google sign-in, Drizzle over SQLite (better-sqlite3), Takeout-zip → Places-API → SQLite import pipeline, Leaflet map (OSM tiles, no client-side key) |
-| Deploy | `deploy/` | Dockerfile, k8s manifests (Deployment, Service, Ingress + Let's Encrypt, nightly import CronJob), `deploy.sh`, GitHub webhook config |
-| Infra | `infra/terraform/` | OCI network + always-free ARM instance (VM.Standard.A1.Flex), cloud-init that installs Docker + k3s, clones this repo, wires the deploy webhook, and runs the first deploy |
+| Deploy | `deploy/` | Dockerfile, k8s manifests (Deployment, Service, Ingress + Let's Encrypt, nightly import CronJob), `deploy.sh`, GitHub webhook config, and `setup-server.sh` — a one-time bootstrap that turns an existing OCI Oracle Linux 9 ARM instance into a single-node k3s host with push-to-deploy |
 
 The app runs as a single container (`gelp:latest`) built directly on the server and imported into k3s — no image registry needed. SQLite lives on a PersistentVolumeClaim mounted at `/data`.
 
@@ -49,21 +48,27 @@ npm run selfcheck             # builds a fixture Takeout zip, parses it, imports
                               # into a temp DB, and asserts counts + cache behavior
 ```
 
-## 4. Provisioning with Terraform (Oracle Cloud, free tier)
+## 4. Server setup (existing OCI instance, Oracle Linux 9 ARM)
 
-Prerequisites: an OCI account, an API signing key (Profile → API keys), and a fork/copy of this repo on GitHub (the server clones it and GitHub pushes trigger deploys).
+Prerequisites: an existing OCI ARM instance (e.g. always-free VM.Standard.A1.Flex) running Oracle Linux 9 with a public IP, SSH access as a sudo-capable user (usually `opc`), and a fork/copy of this repo on GitHub (the server clones it and GitHub pushes trigger deploys).
+
+First, in the OCI console, open the ports the stack needs: in the instance subnet's **security list / NSG**, allow ingress TCP **22, 80, 443, and 9000** (the webhook listener; you can restrict 9000 to GitHub's hook IP ranges from <https://api.github.com/meta> if you like). The bootstrap disables the host firewall per the k3s docs, so the security list is the only packet filter — a port not open there is unreachable.
+
+Then run the bootstrap script on the instance:
 
 ```sh
-cd infra/terraform
-cp terraform.tfvars.example terraform.tfvars   # fill in OCI creds, ssh key, repo_url,
-                                               # gelp_host, letsencrypt_email, webhook_secret
-terraform init
-terraform apply
+scp deploy/setup-server.sh opc@<public-ip>:
+ssh opc@<public-ip>
+sudo GELP_HOST=gelp.example.com \
+     LETSENCRYPT_EMAIL=you@example.com \
+     WEBHOOK_SECRET="$(openssl rand -hex 32)" \
+     REPO_URL=https://github.com/you/gelp.git \
+     bash setup-server.sh
 ```
 
-Cloud-init installs Docker and k3s, clones the repo to `/opt/gelp`, starts the webhook listener on port 9000, and runs the first deploy. Then:
+On a stock OCI image the first run stops after disabling `nm-cloud-setup` and asks you to **reboot and re-run** (a k3s requirement); the script is idempotent, so just run it again with the same variables after the reboot. It installs podman and k3s (with Traefik and local-path storage), clones the repo to `/opt/gelp`, starts the webhook listener on port 9000, and runs the first deploy. Keep the `WEBHOOK_SECRET` value — you'll need it in step 3. Then:
 
-1. **DNS:** point `gelp_host` (an A record) at the public IP from `terraform output`.
+1. **DNS:** point `GELP_HOST` (an A record) at the instance's public IP.
 2. **App secrets:** SSH in and create the k8s secret (or copy `deploy/k8s/20-secret.example.yaml` to `20-secret.yaml`, fill it in, and run `deploy/deploy.sh`):
 
    ```sh
@@ -71,7 +76,7 @@ Cloud-init installs Docker and k3s, clones the repo to `/opt/gelp`, starts the w
      --from-literal=AUTH_SECRET=... \
      --from-literal=AUTH_GOOGLE_ID=... \
      --from-literal=AUTH_GOOGLE_SECRET=... \
-     --from-literal=AUTH_URL=https://<gelp_host> \
+     --from-literal=AUTH_URL=https://<your-host> \
      --from-literal=AUTH_TRUST_HOST=true \
      --from-literal=ALLOWED_EMAILS=you@example.com \
      --from-literal=DATABASE_PATH=/data/gelp.db \
@@ -82,7 +87,7 @@ Cloud-init installs Docker and k3s, clones the repo to `/opt/gelp`, starts the w
    sudo bash /opt/gelp/deploy/deploy.sh
    ```
 
-3. **Push-to-deploy:** in the GitHub repo, Settings → Webhooks → Add webhook. Payload URL `http://<public-ip>:9000/hooks/deploy`, content type `application/json`, secret = your `webhook_secret`, events: just pushes. Every push to `main` then rebuilds the image on the server and rolls the deployment.
+3. **Push-to-deploy:** in the GitHub repo, Settings → Webhooks → Add webhook. Payload URL `http://<public-ip>:9000/hooks/deploy`, content type `application/json`, secret = the `WEBHOOK_SECRET` you passed to `setup-server.sh`, events: just pushes. Every push to `main` then rebuilds the image on the server and rolls the deployment.
 
 Let's Encrypt certificates are issued automatically by cert-manager once DNS resolves to the instance.
 
@@ -93,7 +98,6 @@ app/                  Next.js routes (three-column UI at /, /import, /login, API
 lib/                  Takeout parser, import pipeline, Places client, Drive sync, Drizzle schema
 drizzle/              generated SQL migrations (applied automatically at startup)
 scripts/selfcheck.ts  offline end-to-end check of the import pipeline
-deploy/               Dockerfile, k8s manifests, deploy.sh, webhook config
-infra/terraform/      OCI network + instance + cloud-init
+deploy/               Dockerfile, k8s manifests, deploy.sh, setup-server.sh, webhook config
 .env.example          every environment variable, documented
 ```
