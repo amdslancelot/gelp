@@ -8,9 +8,11 @@ out
 # Local runtime data
 data/
 
-# Environment variables (real secrets); keep the documented example
+# Environment variables (real secrets) live only in gitignored .env files, one
+# per environment (.env, .env.prod). The k8s Secret is created from them at
+# deploy time — never a committed YAML. Keep the documented *.example templates.
 .env*
-!.env.example
+!.env*.example
 
 # Server-side deploy config written by deploy/setup-server.sh into the
 # checkout root; never tracked, so git pulls on the server can't clobber it
@@ -35,3 +37,12 @@ worklog.md
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Editor swap files
+*.swp
+
+# Upward-mobility tooling state (generated token logs / hook state)
+.upward/
+
+# Stray scratch output
+result.json

@@ -60,7 +60,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # 3. Build the image and import it directly into k3s's containerd, since
-#    there is no registry in this setup (imagePullPolicy: Never in the
+#    there is no registry in this setup (imagePullPolicy: IfNotPresent in the
 #    Deployment relies on the image already being present locally). The
 #    build tool is auto-detected: docker on Ubuntu-style hosts, podman on
 #    RHEL-family hosts (e.g. Oracle Linux 9, where podman ships in the
@@ -88,48 +88,58 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Apply Kubernetes manifests in numeric order. The ClusterIssuer and
-#    Ingress contain ${GELP_HOST}/${LETSENCRYPT_EMAIL} placeholders that need
-#    shell substitution before they're valid YAML for kubectl; everything
-#    else is applied as-is. The secret example file is never applied, and the
-#    real secret is only applied if the operator has created it locally.
+# 4. Preflight: the shared Postgres (namespace 'data') must already exist. It
+#    is deployed and owned by the snoopy_home repo (its prod k3s runbook), not
+#    by gelp — gelp only connects to it as gelp_rw.
 # ---------------------------------------------------------------------------
-echo "==> Applying Kubernetes manifests"
-
-kubectl apply -f "${SCRIPT_DIR}/k8s/00-namespace.yaml"
-
-# shellcheck disable=SC2016  # envsubst takes the ${VAR} names literally
-envsubst '${GELP_HOST} ${LETSENCRYPT_EMAIL}' < "${SCRIPT_DIR}/k8s/10-clusterissuer.yaml" | kubectl apply -f -
-
-if [ -f "${SCRIPT_DIR}/k8s/20-secret.yaml" ]; then
-  echo "==> Applying local 20-secret.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/k8s/20-secret.yaml"
-elif kubectl get secret gelp-env -n gelp >/dev/null 2>&1; then
-  echo "==> Secret gelp-env already exists in the cluster, leaving it as-is"
-else
+echo "==> Preflight: shared Postgres Service in namespace 'data'"
+if ! kubectl get svc postgres -n data >/dev/null 2>&1; then
   echo "##############################################################"
-  echo "# WARNING: Secret gelp-env does not exist and no local"
-  echo "# deploy/k8s/20-secret.yaml was found. The app will fail to"
-  echo "# start until you create it. Copy deploy/k8s/20-secret.example.yaml"
-  echo "# to deploy/k8s/20-secret.yaml, fill in real values, then run:"
-  echo "#"
-  echo "#   kubectl apply -f ${SCRIPT_DIR}/k8s/20-secret.yaml"
-  echo "#"
-  echo "# Continuing deployment without it."
+  echo "# WARNING: Service 'postgres' not found in namespace 'data'."
+  echo "# The shared data plane is provisioned by the snoopy_home repo"
+  echo "# (docs/prod-k3s-runbook.md). The app will not become ready"
+  echo "# until it exists. Continuing so the manifests are applied."
   echo "##############################################################"
 fi
 
-kubectl apply -f "${SCRIPT_DIR}/k8s/30-pvc.yaml"
-kubectl apply -f "${SCRIPT_DIR}/k8s/40-deployment.yaml"
-kubectl apply -f "${SCRIPT_DIR}/k8s/50-service.yaml"
+# ---------------------------------------------------------------------------
+# 5. Apply the prod Kustomize overlay. The rendered manifests contain
+#    ${GELP_HOST}/${LETSENCRYPT_EMAIL} placeholders (in the Ingress and
+#    ClusterIssuer) that need shell substitution before they're valid for
+#    kubectl. The gelp-env Secret is NOT part of the overlay: it is created from
+#    a server-local .env.prod (real values live only there).
+# ---------------------------------------------------------------------------
+PROD_OVERLAY="${SCRIPT_DIR}/k8s/overlays/prod"
+echo "==> Applying prod overlay from ${PROD_OVERLAY}"
+
+# Ensure the namespace exists before the secret is created into it.
+kubectl apply -f "${PROD_OVERLAY}/namespace.yaml"
+
+PROD_ENV="${REPO_ROOT}/.env.prod"
+if [ -f "${PROD_ENV}" ]; then
+  echo "==> Creating gelp-env Secret from .env.prod"
+  kubectl create secret generic gelp-env \
+    --namespace gelp \
+    --from-env-file="${PROD_ENV}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+elif kubectl get secret gelp-env -n gelp >/dev/null 2>&1; then
+  echo "==> Secret gelp-env already exists, leaving it as-is"
+else
+  echo "##############################################################"
+  echo "# WARNING: the gelp-env secret is missing and no"
+  echo "# ${PROD_ENV} was found. The app will not start until it exists."
+  echo "# Copy .env.prod.example to .env.prod, fill in real values, then"
+  echo "# re-run this script. Continuing deployment without it."
+  echo "##############################################################"
+fi
 
 # shellcheck disable=SC2016  # envsubst takes the ${VAR} names literally
-envsubst '${GELP_HOST} ${LETSENCRYPT_EMAIL}' < "${SCRIPT_DIR}/k8s/60-ingress.yaml" | kubectl apply -f -
-
-kubectl apply -f "${SCRIPT_DIR}/k8s/70-cronjob.yaml"
+kubectl kustomize "${PROD_OVERLAY}" \
+  | envsubst '${GELP_HOST} ${LETSENCRYPT_EMAIL}' \
+  | kubectl apply -f -
 
 # ---------------------------------------------------------------------------
-# 5. Roll out the new image and wait for it to become healthy.
+# 6. Roll out the new image and wait for it to become healthy.
 # ---------------------------------------------------------------------------
 echo "==> Restarting deployment/gelp"
 kubectl rollout restart deployment/gelp -n gelp
