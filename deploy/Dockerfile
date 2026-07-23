@@ -2,21 +2,18 @@
 #
 # Multi-stage build for Gelp, a Next.js 15 (App Router) standalone server.
 # Build context MUST be the repository root, e.g.:
-#   docker build -f deploy/Dockerfile -t gelp:latest .
+#   podman build -f deploy/Dockerfile -t gelp:latest .
 #
-# Both stages use node:20-alpine, which has official ARM64 and AMD64 images,
-# so this Dockerfile builds correctly on ARM64 hosts (e.g. Graviton/Apple
-# Silicon servers) as well as AMD64.
+# Both stages use node:22-alpine (an active LTS with official ARM64 and AMD64
+# images), so this builds correctly on ARM64 hosts (Graviton / Apple Silicon)
+# as well as AMD64. The database is Postgres over the network (see
+# lib/db/index.ts), so no native addons are compiled and no build toolchain is
+# needed.
 
 # ---------------------------------------------------------------------------
 # Stage 1: deps + build
 # ---------------------------------------------------------------------------
-FROM node:20-alpine AS builder
-
-# better-sqlite3 ships a native addon that must be compiled from source on
-# Alpine (musl) since prebuilt binaries usually target glibc. python3, make
-# and g++ are the toolchain node-gyp needs to do that compile.
-RUN apk add --no-cache python3 make g++
+FROM node:22-alpine AS builder
 
 # Disable Next.js telemetry during the build so CI/server logs stay quiet.
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -34,7 +31,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 2: runtime
 # ---------------------------------------------------------------------------
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
@@ -43,7 +40,7 @@ ENV HOSTNAME=0.0.0.0
 
 WORKDIR /app
 
-# node:20-alpine already ships a non-root "node" user (uid/gid 1000); reuse it
+# node:22-alpine already ships a non-root "node" user (uid/gid 1000); reuse it
 # instead of creating a new one.
 
 # The standalone output is a self-contained server: it includes a minimal
@@ -54,11 +51,6 @@ COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 # Public assets (favicon, images, etc.) are also excluded from standalone.
 COPY --from=builder --chown=node:node /app/public ./public
-
-# SQLite lives on a mounted volume in production (see deploy/k8s/30-pvc.yaml);
-# create the mount point ahead of time so it is owned by the non-root user
-# even before the volume is attached.
-RUN mkdir -p /data && chown node:node /data
 
 USER node
 

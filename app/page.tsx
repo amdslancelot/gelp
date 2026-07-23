@@ -11,7 +11,7 @@ export default async function Home() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const lists = loadLists(session.user.id);
+  const lists = await loadLists(session.user.id);
 
   return (
     <div className="flex h-screen flex-col">

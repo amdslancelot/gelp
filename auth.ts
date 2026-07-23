@@ -1,4 +1,5 @@
 import NextAuth from "next-auth";
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { authConfig } from "./auth.config";
 import { getDb } from "@/lib/db";
@@ -9,35 +10,62 @@ import { users } from "@/lib/db/schema";
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   session: { strategy: "jwt" },
-  events: {
-    // Upsert the user row on every sign-in so the app always has a matching
-    // record. The token's `sub` is the Google account id, used as the row id.
-    async signIn({ user }) {
-      if (!user?.email) return;
-      const db = getDb();
-      const id = user.id ?? user.email;
-      const existing = db
-        .select()
-        .from(users)
-        .where(eq(users.email, user.email))
-        .get();
+  callbacks: {
+    ...authConfig.callbacks,
+    // Resolve the app's own internal user id at sign-in and carry it on the JWT
+    // as `uid` (the session reads this). Identity is an internal UUID we control.
+    // A returning login is recognized by the immutable Google `sub`; the first
+    // time an account that already exists by email signs in (e.g. data migrated
+    // in), it is adopted and its `google_sub` stamped. A genuinely new account
+    // gets a fresh randomUUID. Google's `sub` is only ever a lookup key here,
+    // never the identity.
+    async jwt({ token, user, profile }) {
+      if (user?.email) {
+        const db = await getDb();
+        const googleSub = profile?.sub ?? user.id ?? null;
+        const name = user.name ?? null;
+        const image = user.image ?? null;
 
-      if (existing) {
-        db.update(users)
-          .set({ name: user.name ?? null, image: user.image ?? null })
-          .where(eq(users.id, existing.id))
-          .run();
-      } else {
-        db.insert(users)
-          .values({
+        const bySub = googleSub
+          ? (
+              await db
+                .select()
+                .from(users)
+                .where(eq(users.googleSub, googleSub))
+                .limit(1)
+            )[0]
+          : undefined;
+        const row =
+          bySub ??
+          (
+            await db
+              .select()
+              .from(users)
+              .where(eq(users.email, user.email))
+              .limit(1)
+          )[0];
+
+        if (row) {
+          // Adopt the row: stamp google_sub if not set yet, keep profile fresh.
+          await db
+            .update(users)
+            .set({ googleSub: row.googleSub ?? googleSub, name, image })
+            .where(eq(users.id, row.id));
+          token.uid = row.id;
+        } else {
+          const id = randomUUID();
+          await db.insert(users).values({
             id,
             email: user.email,
-            name: user.name ?? null,
-            image: user.image ?? null,
+            googleSub,
+            name,
+            image,
             createdAt: Date.now(),
-          })
-          .run();
+          });
+          token.uid = id;
+        }
       }
+      return token;
     },
   },
 });

@@ -8,8 +8,10 @@ const nextConfig: NextConfig = {
   // .next/standalone/server.js even when an ancestor directory looks like a
   // workspace root (which would otherwise nest the output under the full path).
   outputFileTracingRoot: path.join(__dirname),
-  // better-sqlite3 is a native module and must not be bundled by the server compiler.
-  serverExternalPackages: ["better-sqlite3"],
+  // pg carries a dynamic optional `pg-native` require that the server compiler
+  // should not try to bundle; keep it external so standalone tracing includes it
+  // from node_modules instead.
+  serverExternalPackages: ["pg"],
 };
 
 export default nextConfig;

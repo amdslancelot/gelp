@@ -45,43 +45,43 @@ export async function runImport(
     result.lists += 1;
 
     // Upsert the list by (user_id, name).
-    const existing = db
+    const existingRows = await db
       .select()
       .from(lists)
       .where(and(eq(lists.userId, userId), eq(lists.name, parsedList.name)))
-      .get();
+      .limit(1);
+    const existing = existingRows[0];
 
     let listId: string;
     if (existing) {
       listId = existing.id;
       // Replace the list's places on re-import.
-      db.delete(places).where(eq(places.listId, listId)).run();
-      db.update(lists)
+      await db.delete(places).where(eq(places.listId, listId));
+      await db
+        .update(lists)
         .set({ source, importedAt: Date.now() })
-        .where(eq(lists.id, listId))
-        .run();
+        .where(eq(lists.id, listId));
     } else {
       listId = randomUUID();
-      db.insert(lists)
-        .values({
-          id: listId,
-          userId,
-          name: parsedList.name,
-          source,
-          importedAt: Date.now(),
-        })
-        .run();
+      await db.insert(lists).values({
+        id: listId,
+        userId,
+        name: parsedList.name,
+        source,
+        importedAt: Date.now(),
+      });
     }
 
     for (const parsedPlace of parsedList.places) {
       result.places += 1;
       const key = cacheKeyFor(parsedPlace);
 
-      const cached = db
+      const cachedRows = await db
         .select()
         .from(placeCache)
         .where(eq(placeCache.key, key))
-        .get();
+        .limit(1);
+      const cached = cachedRows[0];
 
       if (cached) {
         // The place has been resolved before: zero API calls.
@@ -91,7 +91,8 @@ export async function runImport(
         parsedPlace.lng !== undefined
       ) {
         // Coordinates came straight from Saved Places.json: zero API calls.
-        db.insert(placeCache)
+        await db
+          .insert(placeCache)
           .values({
             key,
             placeId: null,
@@ -103,8 +104,7 @@ export async function runImport(
             types: null,
             fetchedAt: Date.now(),
           })
-          .onConflictDoNothing()
-          .run();
+          .onConflictDoNothing();
       } else {
         // Resolve via the Places client and cache the outcome, including a
         // "miss" row so a failure is not retried on the next import.
@@ -113,7 +113,8 @@ export async function runImport(
           parsedPlace.title +
           (parsedPlace.address ? " " + parsedPlace.address : "");
         const found = await client.searchText(query);
-        db.insert(placeCache)
+        await db
+          .insert(placeCache)
           .values({
             key,
             placeId: found?.placeId ?? null,
@@ -125,21 +126,18 @@ export async function runImport(
             types: found ? JSON.stringify(found.types) : null,
             fetchedAt: Date.now(),
           })
-          .onConflictDoNothing()
-          .run();
+          .onConflictDoNothing();
       }
 
-      db.insert(places)
-        .values({
-          id: randomUUID(),
-          listId,
-          userId,
-          title: parsedPlace.title,
-          note: parsedPlace.note ?? null,
-          mapsUrl: parsedPlace.mapsUrl ?? null,
-          cacheKey: key,
-        })
-        .run();
+      await db.insert(places).values({
+        id: randomUUID(),
+        listId,
+        userId,
+        title: parsedPlace.title,
+        note: parsedPlace.note ?? null,
+        mapsUrl: parsedPlace.mapsUrl ?? null,
+        cacheKey: key,
+      });
     }
   }
 

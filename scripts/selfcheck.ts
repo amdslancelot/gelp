@@ -1,12 +1,11 @@
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import AdmZip from "adm-zip";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { randomUUID } from "node:crypto";
+import AdmZip from "adm-zip";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { eq } from "drizzle-orm";
+import { Pool } from "pg";
 import * as schema from "../lib/db/schema";
 import { users } from "../lib/db/schema";
 import { parseTakeoutZip } from "../lib/takeout";
@@ -107,7 +106,23 @@ function buildFixture(): Buffer {
   return buf;
 }
 
-function main() {
+// The base Postgres server to run against. The self-check never touches any app
+// database directly; it creates a throwaway database on the same server, runs
+// everything there, and drops it at the end, so repeated runs stay hermetic.
+//
+// CREATE/DROP DATABASE needs the `postgres` superuser — the app's own gelp_rw
+// role deliberately can't do either (and can't even connect to the maintenance
+// DB). So this reads SELFCHECK_ADMIN_URL, not DATABASE_URL; the default matches
+// the shared minikube server's out-of-band superuser password default ("dev",
+// per snoopy_home's runbook), reached through the `npm run db:up` port-forward.
+function baseUrl(): string {
+  return (
+    process.env.SELFCHECK_ADMIN_URL ??
+    "postgres://postgres:dev@localhost:5432/postgres"
+  );
+}
+
+async function main() {
   console.log("Gelp offline self-check\n");
 
   // 1. Build the fixture.
@@ -141,22 +156,26 @@ function main() {
     "Saved Places coordinates carried through",
   );
 
-  // 3. Fresh import into a temp database.
+  // 3. Create a throwaway database on the target server for a fresh import.
   console.log("\nFirst import:");
-  const dbDir = mkdtempSync(join(tmpdir(), "gelp-selfcheck-"));
-  const sqlite = new Database(join(dbDir, "test.db"));
-  sqlite.pragma("foreign_keys = ON");
-  const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: resolve("drizzle") });
+  const dbName = `gelp_selfcheck_${randomUUID().replace(/-/g, "")}`;
+  const admin = new Pool({ connectionString: baseUrl() });
+  await admin.query(`CREATE DATABASE ${dbName}`);
 
-  const userId = randomUUID();
-  db.insert(users)
-    .values({ id: userId, email: "self@check.test", createdAt: Date.now() })
-    .run();
+  const scratchUrl = new URL(baseUrl());
+  scratchUrl.pathname = `/${dbName}`;
+  const pool = new Pool({ connectionString: scratchUrl.toString() });
 
-  const client = new StubPlacesClient();
-  // The self-check is synchronous below because runImport is awaited in-line.
-  return (async () => {
+  try {
+    const db = drizzle(pool, { schema });
+    await migrate(db, { migrationsFolder: resolve("drizzle") });
+
+    const userId = randomUUID();
+    await db
+      .insert(users)
+      .values({ id: userId, email: "self@check.test", createdAt: Date.now() });
+
+    const client = new StubPlacesClient();
     const first = await runImport(db, userId, parsed, client, "upload");
     assert(first.lists === 3, "imported 3 lists");
     assert(first.places === 7, "imported 7 places");
@@ -188,24 +207,36 @@ function main() {
     );
 
     // Sanity check that re-import replaced rather than duplicated places.
-    const totalPlaces = db
-      .select()
-      .from(schema.places)
-      .where(eq(schema.places.userId, userId))
-      .all().length;
-    assert(totalPlaces === 7, `still 7 places after re-import, got ${totalPlaces}`);
+    const totalPlaces = (
+      await db
+        .select()
+        .from(schema.places)
+        .where(eq(schema.places.userId, userId))
+    ).length;
+    assert(
+      totalPlaces === 7,
+      `still 7 places after re-import, got ${totalPlaces}`,
+    );
+  } finally {
+    // 5. Tear down the throwaway database.
+    await pool.end();
+    await admin.query(`DROP DATABASE ${dbName} WITH (FORCE)`);
+    await admin.end();
+  }
 
-    // 5. Summary.
-    console.log("");
-    if (failures.length === 0) {
-      console.log("SELF-CHECK PASSED");
-      process.exit(0);
-    } else {
-      console.log(`SELF-CHECK FAILED: ${failures.length} assertion(s)`);
-      for (const f of failures) console.log(`  - ${f}`);
-      process.exit(1);
-    }
-  })();
+  // 6. Summary.
+  console.log("");
+  if (failures.length === 0) {
+    console.log("SELF-CHECK PASSED");
+    process.exit(0);
+  } else {
+    console.log(`SELF-CHECK FAILED: ${failures.length} assertion(s)`);
+    for (const f of failures) console.log(`  - ${f}`);
+    process.exit(1);
+  }
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

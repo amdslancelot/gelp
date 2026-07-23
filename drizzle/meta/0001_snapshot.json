@@ -1,6 +1,6 @@
 {
-  "id": "92dd2b61-82a4-4f55-9855-b686595c87cf",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "a37fb554-250e-48a0-b135-de32788641f0",
+  "prevId": "92dd2b61-82a4-4f55-9855-b686595c87cf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -248,6 +248,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "google_sub": {
+          "name": "google_sub",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "name": {
           "name": "name",
           "type": "text",
@@ -277,6 +283,13 @@
           "nullsNotDistinct": false,
           "columns": [
             "email"
+          ]
+        },
+        "users_google_sub_unique": {
+          "name": "users_google_sub_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "google_sub"
           ]
         }
       },

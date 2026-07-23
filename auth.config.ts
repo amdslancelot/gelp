@@ -20,10 +20,11 @@ export const authConfig: NextAuthConfig = {
       const email = profile?.email ?? user?.email;
       return isEmailAllowed(email);
     },
-    // Carry a stable user id into the session for DB queries.
+    // Expose the app's internal user id (set on the token by the jwt callback in
+    // auth.ts) to server components. This is our own UUID, not Google's `sub`.
     session({ session, token }) {
-      if (token.sub) {
-        session.user.id = token.sub;
+      if (typeof token.uid === "string") {
+        session.user.id = token.uid;
       }
       return session;
     },

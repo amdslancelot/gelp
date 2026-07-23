@@ -8,3 +8,11 @@ declare module "next-auth" {
     } & DefaultSession["user"];
   }
 }
+
+// Carry the app's own internal user id (a UUID we control — never Google's
+// `sub`) on the JWT, so the session can expose it as `session.user.id`.
+declare module "next-auth/jwt" {
+  interface JWT {
+    uid?: string;
+  }
+}

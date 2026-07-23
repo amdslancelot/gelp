@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const db = getDb();
+  const db = await getDb();
 
   // Determine which user owns the import: the first allowlisted email if set
   // (upserting it), otherwise the first existing user.
@@ -39,21 +39,22 @@ export async function POST(req: Request) {
   let userId: string;
   if (allow.length > 0) {
     const email = allow[0];
-    const existing = db
+    const existingRows = await db
       .select()
       .from(users)
       .where(eq(users.email, email))
-      .get();
+      .limit(1);
+    const existing = existingRows[0];
     if (existing) {
       userId = existing.id;
     } else {
       userId = randomUUID();
-      db.insert(users)
-        .values({ id: userId, email, createdAt: Date.now() })
-        .run();
+      await db
+        .insert(users)
+        .values({ id: userId, email, createdAt: Date.now() });
     }
   } else {
-    const first = db.select().from(users).all()[0];
+    const first = (await db.select().from(users).limit(1))[0];
     if (!first) {
       return NextResponse.json(
         { error: "No user available to own the import" },
