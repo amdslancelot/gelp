@@ -1,0 +1,31 @@
+# Staging overlay: upstream Kubernetes (minikube), namespace gelp-staging,
+# locally built image, plain-HTTP ingress on staging.localhost. The database is
+# the shared Postgres in the `data` namespace (owned by the snoopy_home repo).
+#
+# The gelp-env Secret is NOT part of this overlay: stage.sh creates it from your
+# gitignored .env at deploy time (kubectl create secret --from-env-file), so real
+# values never live in git — snoopy_home's policy (no passwords in files except
+# the *.example templates).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gelp-staging
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+# stage.sh builds and loads this exact tag into minikube.
+images:
+  - name: gelp
+    newTag: staging
+
+# Point the base ingress at the local staging host.
+patches:
+  - target:
+      kind: Ingress
+      name: gelp
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: staging.localhost

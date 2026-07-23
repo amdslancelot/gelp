@@ -1,0 +1,15 @@
+# Namespace-agnostic base for Gelp. Overlays set the namespace, the image tag,
+# the ingress host, secrets, and (in prod) TLS. Nothing here hardcodes a
+# namespace or an environment-specific value.
+#
+# The database is NOT here: gelp connects to the shared Postgres in the `data`
+# namespace, deployed and owned by the snoopy_home repo. Its DATABASE_URL comes
+# from the gelp-env Secret each overlay supplies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - app-deployment.yaml
+  - app-service.yaml
+  - app-ingress.yaml
+  - cronjob.yaml

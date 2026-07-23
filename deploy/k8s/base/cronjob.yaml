@@ -1,12 +1,12 @@
 # Nightly import job: hits the app's own /api/cron/import endpoint over the
-# in-cluster Service address so it goes through the same code path (and auth
-# check) as any other caller, rather than reaching into the database
-# directly. Runs at 03:30 server time every day.
+# in-cluster Service so it goes through the same code path (and auth check) as
+# any other caller. The URL is namespace-relative (http://gelp) so this same
+# manifest works unchanged in every namespace the overlay targets. Runs at
+# 03:30 server time every day.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: gelp-import
-  namespace: gelp
 spec:
   schedule: "30 3 * * *"
   concurrencyPolicy: Forbid
@@ -23,7 +23,7 @@ spec:
                 - --fail-with-body
                 - --request
                 - POST
-                - http://gelp.gelp.svc.cluster.local/api/cron/import
+                - http://gelp/api/cron/import
                 - --header
                 - "Authorization: Bearer $(CRON_SECRET)"
               env:

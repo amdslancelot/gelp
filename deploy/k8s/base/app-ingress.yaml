@@ -1,0 +1,21 @@
+# Public HTTP entrypoint, served by Traefik (k3s bundles it in prod; installed
+# via Helm on minikube in staging). The host is a placeholder patched per
+# overlay. TLS + the cert-manager annotation are added by the prod overlay
+# only; staging is plain HTTP on a *.localhost host.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gelp
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: gelp.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gelp
+                port:
+                  number: 80

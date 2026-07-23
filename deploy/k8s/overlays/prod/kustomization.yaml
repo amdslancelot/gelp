@@ -1,0 +1,47 @@
+# Prod overlay: k3s on OCI, namespace gelp, HTTPS via cert-manager + Let's
+# Encrypt over Traefik.
+#
+# DEFERRED: prod rollout is not part of the current dev/stage work. This overlay
+# is authored so bringing prod back is a thin change, but it has not been
+# exercised end-to-end. Before first use, verify against a live k3s cluster.
+#
+# The gelp-env Secret is NOT committed here — deploy/deploy.sh applies it from a
+# server-local file (see deploy/README.md); the database is the shared Postgres
+# in the `data` namespace, deployed and owned by the snoopy_home repo.
+# ${GELP_HOST} and
+# ${LETSENCRYPT_EMAIL} are filled by envsubst in deploy.sh after `kubectl
+# kustomize` renders this overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gelp
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - clusterissuer.yaml
+
+images:
+  - name: gelp
+    newTag: latest
+
+# Add TLS + the cert-manager annotation and set the real host on the base
+# ingress (which ships plain HTTP for staging).
+patches:
+  - target:
+      kind: Ingress
+      name: gelp
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: ${GELP_HOST}
+      - op: add
+        path: /metadata/annotations
+        value:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+      - op: add
+        path: /spec/tls
+        value:
+          - hosts:
+              - ${GELP_HOST}
+            secretName: gelp-tls

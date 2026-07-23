@@ -1,0 +1,14 @@
+# Stable in-cluster address for the app. The Ingress routes external traffic
+# here, and the gelp-import CronJob calls it directly at http://gelp within the
+# same namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gelp
+spec:
+  selector:
+    app: gelp
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
