@@ -1,79 +1,116 @@
 # Gelp deployment
 
-This directory contains everything needed to build and run Gelp on the
-production server: the container image definition, the Kubernetes manifests
-for the single-node k3s cluster, the deploy script, and the GitHub webhook
-configuration that triggers it automatically.
+This directory contains everything needed to build and run Gelp: the container
+image definition, the Kubernetes manifests (a Kustomize base with `staging` and
+`prod` overlays), the deploy scripts, and the GitHub webhook configuration.
+
+Data lives in a **shared PostgreSQL** server in the `data` namespace — deployed
+and owned by the **snoopy_home** repo (see its
+`docs/PLAN-postgres-role-isolation.md`), not by gelp. Every app on the cluster
+gets its own database and least-privilege role on it; gelp connects at
+`postgres.data.svc:5432/gelp` as `gelp_rw`. Gelp's manifests only *connect* to
+that server; `scripts/provision-db.sh` creates gelp's database/role on it once
+per cluster.
 
 ## Layout
 
-- `Dockerfile` — multi-stage build that produces the `gelp:latest` runtime
-  image from the Next.js standalone build output.
-- `k8s/` — numbered Kubernetes manifests, applied in order by `deploy.sh`:
-  namespace, cert-manager ClusterIssuer, Secret template, PVC, Deployment,
-  Service, Ingress, and the nightly import CronJob.
-- `deploy.sh` — idempotent build-and-deploy script; run by the webhook on
-  every push to `main`, and safe to run by hand at any time.
-- `setup-server.sh` — one-time root bootstrap of an existing Oracle Linux 9
-  ARM host: packages, podman, k3s, the webhook systemd service, the repo
-  clone at `/opt/gelp`, and the first deploy. See section 4 of the root
-  README for the full walkthrough.
-- `webhook/` — `adnanh/webhook` configuration that runs `deploy.sh` when
-  GitHub delivers a push event to `main`.
+- `Dockerfile` — multi-stage build that produces the `gelp` runtime image from
+  the Next.js standalone build output. No native toolchain (the database driver
+  is pure-JS `pg`).
+- `k8s/base/` — namespace-agnostic app manifests: Deployment, Service, Ingress
+  (plain HTTP), and the nightly-import CronJob. Nothing here hardcodes a namespace
+  or host. The database is not here — it is the shared Postgres in the `data`
+  namespace, owned by snoopy_home.
+- `k8s/overlays/staging/` — upstream Kubernetes (minikube), namespace
+  `gelp-staging`, locally built image, `staging.localhost` ingress. The
+  `gelp-env` Secret is created from your `.env` at deploy time (no secret YAML).
+- `k8s/overlays/prod/` — k3s on OCI, namespace `gelp`, HTTPS via cert-manager +
+  Let's Encrypt over Traefik. **Deferred**: authored but not yet exercised
+  end-to-end. The `gelp-env` Secret is created from a server-local `.env.prod`.
+- `stage.sh` — preflight-check the shared Postgres → build with podman → load
+  into minikube → apply the staging app overlay → create `gelp-env` from `.env`.
+  No registry, no Docker.
+- `deploy.sh` — prod build-and-deploy on the server; run by the webhook on every
+  push to `main`, and safe to run by hand.
+- `setup-server.sh` — one-time root bootstrap of an existing Oracle Linux 9 ARM
+  host. See section 4 of the root README.
+- `webhook/` — `adnanh/webhook` config that runs `deploy.sh` on a push to `main`.
 
-## Manual deploy
+## Staging (local Kubernetes)
 
-On the server (where the repo is checked out at `/opt/gelp`):
+Prereqs (one-time): a running minikube using a native driver, and Traefik for
+ingress.
+
+```sh
+minikube start --driver=vfkit      # real upstream k8s, no Docker
+helm repo add traefik https://traefik.github.io/charts && helm install traefik traefik/traefik
+```
+
+Then each deploy:
+
+```sh
+deploy/stage.sh
+```
+
+It checks the shared Postgres exists (`svc/postgres` in ns `data` — provisioned
+by `snoopy_home/deploy/setup-minikube.sh`), builds `gelp:staging` with podman,
+`podman save … | minikube image load -`, then
+`kubectl apply -k deploy/k8s/overlays/staging` and **creates the `gelp-env`
+Secret from your `.env`** (via `kubectl create secret --from-env-file`, with the
+DB host and `AUTH_URL` rewritten for in-cluster). Reach the app with
+`kubectl -n gelp-staging port-forward svc/gelp 3000:80` (then
+<http://localhost:3000>), or via `minikube tunnel` on <http://staging.localhost>.
+
+**Secrets are never committed**: they live only in your gitignored `.env` (dev
+and staging share it). For Google sign-in on staging, add
+`http://staging.localhost/api/auth/callback/google` as an authorized redirect
+URI in the Google Cloud console.
+
+## Manual prod deploy
+
+On the server (repo checked out at `/opt/gelp`):
 
 ```sh
 ./deploy/deploy.sh
 ```
 
-This pulls the latest commit (if running inside a git checkout with an
-`origin` remote), installs cert-manager on first run, builds the container
-image (with docker or podman, whichever is installed), imports it into
-k3s's containerd, applies all manifests, and rolls out the new image,
-waiting until the Deployment reports healthy.
+This pulls the latest commit, installs cert-manager on first run, builds the
+image (docker or podman, whichever is present) and imports it into k3s's
+containerd, renders the prod overlay (`kubectl kustomize` + `envsubst` for
+`${GELP_HOST}`/`${LETSENCRYPT_EMAIL}`), applies it, and rolls out the new image.
 
-## Creating the app secret
+## Creating the prod config
 
-The app's environment variables (Auth.js secrets, Google OAuth/Maps/Drive
-credentials, the cron bearer token, etc.) are supplied by the Kubernetes
-Secret `gelp-env`, which is deliberately **not** committed to this
-repository. To create it:
+Prod's app config lives in a server-local **`.env.prod`**, gitignored — real
+values never sit in a committed or duplicated YAML. On the server:
 
-1. Copy `deploy/k8s/20-secret.example.yaml` to `deploy/k8s/20-secret.yaml`
-   (the latter is gitignored via `deploy/k8s/.gitignore`).
-2. Fill in real values for every placeholder.
-3. Either let the next run of `deploy.sh` apply it automatically, or apply it
-   yourself right away:
+```sh
+cp /opt/gelp/.env.prod.example /opt/gelp/.env.prod   # then fill in real values
+```
 
-   ```sh
-   kubectl apply -f deploy/k8s/20-secret.yaml
-   ```
+The `gelp_rw` password in its `DATABASE_URL` must match what
+`scripts/provision-db.sh` set on the prod shared Postgres
+(`GELP_DB_PASSWORD=... scripts/provision-db.sh` on the server, once). `deploy.sh`
+turns `.env.prod` into the `gelp-env` Secret with `kubectl create secret
+--from-env-file`. The shared server's own superuser secret lives with its owner
+(snoopy_home); gelp never touches it.
 
-If `deploy.sh` runs and finds neither a local `20-secret.yaml` nor an
-existing `gelp-env` Secret in the cluster, it prints a loud warning with the
-exact command above and continues anyway, since the rest of the stack (PVC,
-Service, Ingress, CronJob) can still be applied without it — only the app
-pod itself will fail to become ready until the secret exists.
+If `deploy.sh` finds neither `.env.prod` nor an existing cluster secret, it
+prints a loud warning and continues; the pod stays unready until it exists.
 
 ## How the nightly import works
 
-The `gelp-import` CronJob (`deploy/k8s/70-cronjob.yaml`) runs at 03:30 server
-time every night. It uses a small `curlimages/curl` container to `POST` to
-`http://gelp.gelp.svc.cluster.local/api/cron/import` — the app's own Service
-address inside the cluster — with an `Authorization: Bearer $CRON_SECRET`
-header sourced from the `gelp-env` Secret, and `--fail-with-body` so a
-non-2xx response shows up as a failed Job with the response body in the pod
-logs. `restartPolicy: Never` and a small `backoffLimit` mean a failing import
-creates a few retry Pods and then gives up rather than retrying forever;
-check `kubectl get jobs -n gelp` / `kubectl logs` on the most recent
-`gelp-import-*` pod to debug a failure.
+The `gelp-import` CronJob (`deploy/k8s/base/cronjob.yaml`) runs at 03:30 server
+time nightly. A small `curlimages/curl` container `POST`s to `http://gelp/api/cron/import`
+— the app's own Service, addressed namespace-relative so the same manifest works
+in any namespace — with an `Authorization: Bearer $CRON_SECRET` header from the
+`gelp-env` Secret and `--fail-with-body` so a non-2xx shows up as a failed Job.
+`restartPolicy: Never` + a small `backoffLimit` mean a failing import retries a
+few times then gives up; check `kubectl get jobs -n gelp` / `kubectl logs` on
+the most recent `gelp-import-*` pod to debug.
 
 ## Automatic deploys
 
-`webhook/hooks.json` configures `adnanh/webhook` (already running as a
-systemd service on the server, port 9000) to run `deploy.sh` whenever GitHub
-delivers a signed push event to `refs/heads/main`. See `webhook/README.md`
-for how to point the GitHub repository's webhook at this listener.
+`webhook/hooks.json` configures `adnanh/webhook` (running as a systemd service
+on port 9000) to run `deploy.sh` on a signed push to `refs/heads/main`. See
+`webhook/README.md` for pointing the GitHub webhook at the listener.
