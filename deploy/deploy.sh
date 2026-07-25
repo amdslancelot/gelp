@@ -14,14 +14,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# /opt/gelp/deploy.env is written by deploy/setup-server.sh on the server
-# and supplies GELP_HOST, LETSENCRYPT_EMAIL, and KUBECONFIG. It won't exist
-# when this script is run outside that server (e.g. a developer laptop), so
-# tolerate its absence rather than failing.
-if [ -f /opt/gelp/deploy.env ]; then
-  # shellcheck disable=SC1091
-  source /opt/gelp/deploy.env
-fi
+# kubectl needs no setup here: the webhook listener runs as root, and the
+# platform repo's node bootstrap symlinks /root/.kube/config to the k3s
+# kubeconfig (bootstrap/bootstrap-node.sh).
 
 cd "${REPO_ROOT}"
 
@@ -40,26 +35,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Install cert-manager if it isn't already present in the cluster.
-# ---------------------------------------------------------------------------
-CERT_MANAGER_VERSION="v1.15.3"
-CERT_MANAGER_MANIFEST="https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
-
-if kubectl get ns cert-manager >/dev/null 2>&1; then
-  echo "==> cert-manager namespace already exists, skipping install"
-else
-  echo "==> Installing cert-manager ${CERT_MANAGER_VERSION}"
-  kubectl apply -f "${CERT_MANAGER_MANIFEST}"
-  echo "==> Waiting for cert-manager deployments to become available"
-  kubectl wait --for=condition=Available --timeout=180s \
-    deployment/cert-manager \
-    deployment/cert-manager-webhook \
-    deployment/cert-manager-cainjector \
-    -n cert-manager
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Build the image and import it directly into k3s's containerd, since
+# 2. Build the image and import it directly into k3s's containerd, since
 #    there is no registry in this setup (imagePullPolicy: IfNotPresent in the
 #    Deployment relies on the image already being present locally). The
 #    build tool is auto-detected: docker on Ubuntu-style hosts, podman on
@@ -88,26 +64,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Preflight: the shared Postgres (namespace 'data') must already exist. It
-#    is deployed and owned by the snoopy_home repo (its prod k3s runbook), not
-#    by gelp — gelp only connects to it as gelp_rw.
+# 3. Preflight: the shared Postgres (namespace 'data') must already exist. It
+#    is deployed and owned by the platform repo, not by gelp — gelp only
+#    connects to it as gelp_rw.
 # ---------------------------------------------------------------------------
 echo "==> Preflight: shared Postgres Service in namespace 'data'"
 if ! kubectl get svc postgres -n data >/dev/null 2>&1; then
   echo "##############################################################"
   echo "# WARNING: Service 'postgres' not found in namespace 'data'."
-  echo "# The shared data plane is provisioned by the snoopy_home repo"
-  echo "# (docs/prod-k3s-runbook.md). The app will not become ready"
-  echo "# until it exists. Continuing so the manifests are applied."
+  echo "# The shared data plane is provisioned by the platform repo"
+  echo "# (cluster/data-postgres/). The app will not become ready until"
+  echo "# it exists. Continuing so the manifests are applied."
   echo "##############################################################"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Apply the prod Kustomize overlay. The rendered manifests contain
-#    ${GELP_HOST}/${LETSENCRYPT_EMAIL} placeholders (in the Ingress and
-#    ClusterIssuer) that need shell substitution before they're valid for
-#    kubectl. The gelp-env Secret is NOT part of the overlay: it is created from
-#    a server-local .env.prod (real values live only there).
+# 4. Apply the prod Kustomize overlay. The host is baked into the overlay
+#    (gelp.lans-h.cc) — no placeholder substitution needed. The gelp-env
+#    Secret is NOT part of the overlay: it is created from a server-local
+#    .env.prod (real values live only there).
 # ---------------------------------------------------------------------------
 PROD_OVERLAY="${SCRIPT_DIR}/k8s/overlays/prod"
 echo "==> Applying prod overlay from ${PROD_OVERLAY}"
@@ -133,13 +108,10 @@ else
   echo "##############################################################"
 fi
 
-# shellcheck disable=SC2016  # envsubst takes the ${VAR} names literally
-kubectl kustomize "${PROD_OVERLAY}" \
-  | envsubst '${GELP_HOST} ${LETSENCRYPT_EMAIL}' \
-  | kubectl apply -f -
+kubectl kustomize "${PROD_OVERLAY}" | kubectl apply -f -
 
 # ---------------------------------------------------------------------------
-# 6. Roll out the new image and wait for it to become healthy.
+# 5. Roll out the new image and wait for it to become healthy.
 # ---------------------------------------------------------------------------
 echo "==> Restarting deployment/gelp"
 kubectl rollout restart deployment/gelp -n gelp
