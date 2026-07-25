@@ -66,7 +66,13 @@ echo "==> Building gelp:latest with ${CONTAINER_TOOL}"
 
 echo "==> Importing gelp:latest into k3s containerd"
 if [ "${CONTAINER_TOOL}" = "podman" ]; then
-  podman save --format docker-archive gelp:latest | k3s ctr images import -
+  # Save under the fully-qualified docker.io/library/ name: podman stores an
+  # unqualified build tag as localhost/gelp:latest, but the kubelet resolves
+  # the pod spec's bare "gelp:latest" to docker.io/library/gelp:latest — the
+  # imported name has to match or containerd ignores the local image and tries
+  # a registry pull (which fails: there is no such public image).
+  podman tag gelp:latest docker.io/library/gelp:latest
+  podman save --format docker-archive docker.io/library/gelp:latest | k3s ctr images import -
 else
   docker save gelp:latest | k3s ctr images import -
 fi
