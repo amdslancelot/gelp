@@ -8,6 +8,14 @@
 
 set -euo pipefail
 
+# k3s installs its binaries (k3s, and the kubectl/ctr symlinks) into
+# /usr/local/bin. That is on the PATH for the webhook's systemd service and for
+# an interactive root login, but NOT under `sudo bash deploy.sh`: sudo resets
+# PATH to its secure_path, which excludes /usr/local/bin — so bare `k3s`/
+# `kubectl` fail with "command not found" on a manual run. Prepend it so the
+# script works identically whether the webhook or a human invokes it.
+export PATH="/usr/local/bin:${PATH}"
+
 # ---------------------------------------------------------------------------
 # 0. Locate the repo root and load server-provided configuration.
 # ---------------------------------------------------------------------------
