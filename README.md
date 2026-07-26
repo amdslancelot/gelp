@@ -9,7 +9,7 @@ Google offers no API for saved lists, so Gelp imports a **Google Takeout "Saved"
 | Layer | Where | What |
 |---|---|---|
 | App | repo root (`app/`, `lib/`, …) | Next.js 15 (App Router, standalone output), NextAuth v5 Google sign-in, Drizzle over PostgreSQL (`pg`), Takeout-zip → Places-API → Postgres import pipeline, Leaflet map (OSM tiles, no client-side key) |
-| Deploy | `deploy/` | Dockerfile, Kustomize k8s manifests (app base + `staging`/`prod` overlays for the app Deployment, Service, Ingress + Let's Encrypt, nightly import CronJob), `stage.sh`, `deploy.sh`, GitHub webhook config, and `setup-server.sh` — an idempotent bootstrap for the OCI Oracle Linux 9 ARM k3s host. The **shared Postgres data plane** (`data` namespace) is owned by the snoopy_home repo; gelp connects to it and provisions its own DB/role via `scripts/provision-db.sh` |
+| Deploy | `deploy/` | Dockerfile, Kustomize k8s manifests (app base + `staging`/`prod` overlays for the app Deployment, Service, Ingress, nightly import CronJob), `stage.sh`, `deploy.sh`, and `setup-server.sh` — onboarding onto a node the **platform** repo has already bootstrapped (k3s/Traefik, the webhook listener + wildcard TLS live in that repo). The **shared Postgres data plane** (`data` namespace) is owned by the snoopy_home repo; gelp connects to it and provisions its own DB/role via `scripts/provision-db.sh` |
 
 The app runs as a single container (`gelp`) built with podman and loaded into the target cluster's node image store — no image registry needed. **PostgreSQL is a shared in-cluster server in the `data` namespace** — one server per cluster, one database + least-privilege role per app (`gelp` / `gelp_rw`), deployed and owned by the **snoopy_home** repo (its `docs/PLAN-postgres-role-isolation.md` is the canonical multi-app plan). Gelp connects via `DATABASE_URL` at `postgres.data.svc:5432/gelp`. Environments: `npm run dev` locally (through a port-forward to the shared staging Postgres — dev has no database of its own), a `staging` overlay on the shared minikube, and a `prod` overlay on k3s.
 
@@ -157,38 +157,46 @@ Notes:
 - Tear down: `kubectl delete ns gelp-staging` (or `minikube stop` to pause the
   whole cluster).
 
-## 4. Server setup (existing OCI instance, Oracle Linux 9 ARM)
+## 4. Onboarding onto the shared platform node
 
-Prerequisites: an existing OCI ARM instance (e.g. always-free VM.Standard.A1.Flex) running Oracle Linux 9 with a public IP, SSH access as a sudo-capable user (usually `opc`), and a fork/copy of this repo on GitHub (the server clones it and GitHub pushes trigger deploys).
+Gelp runs on the shared fleet node owned by the **`platform`** repo, which
+bootstraps k3s + Traefik + podman, runs the `adnanh/webhook` listener on `:9000`,
+holds the `*.lans-h.cc` wildcard TLS cert (Traefik's default certificate), owns
+the OCI security list (ports 22/80/443/9000), and owns the shared Postgres in the
+`data` namespace. This app only *onboards* onto a node the platform has already
+prepared — it no longer installs any of that.
 
-First, in the OCI console, open the ports the stack needs: in the instance subnet's **security list / NSG**, allow ingress TCP **22, 80, 443, and 9000** (the webhook listener; you can restrict 9000 to GitHub's hook IP ranges from <https://api.github.com/meta> if you like). The bootstrap disables the host firewall per the k3s docs, so the security list is the only packet filter — a port not open there is unreachable.
+Prerequisites: the platform node is up (see the platform repo's runbook, Gates
+1–5) and you can SSH in as `opc`.
 
-Then run the bootstrap script on the instance:
+On the node, clone the app and run the first deploy:
 
 ```sh
-scp deploy/setup-server.sh opc@<public-ip>:
-ssh opc@<public-ip>
-sudo GELP_HOST=gelp.example.com \
-     LETSENCRYPT_EMAIL=you@example.com \
-     WEBHOOK_SECRET="$(openssl rand -hex 32)" \
-     REPO_URL=https://github.com/you/gelp.git \
-     bash setup-server.sh
+sudo REPO_URL=https://github.com/you/gelp.git bash deploy/setup-server.sh
+# (or, if /opt/gelp is already cloned, just: sudo bash /opt/gelp/deploy/deploy.sh)
 ```
 
-On a stock OCI image the first run stops after disabling `nm-cloud-setup` and asks you to **reboot and re-run** (a k3s requirement); the script is idempotent, so just run it again with the same variables after the reboot. It installs podman and k3s (with Traefik and local-path storage), clones the repo to `/opt/gelp`, starts the webhook listener on port 9000, and runs the first deploy. Keep the `WEBHOOK_SECRET` value — you'll need it in step 3. Then:
+Then, once:
 
-1. **DNS:** point `GELP_HOST` (an A record) at the instance's public IP.
-2. **Provision + app config:** SSH in, then:
-   - **Provision gelp's DB/role** on the shared `data`-namespace Postgres (owned by snoopy_home; must already be running), once: `GELP_DB_PASSWORD="$(openssl rand -hex 24)" bash /opt/gelp/scripts/provision-db.sh` (keep the password for the next step).
-   - **App config** (`.env.prod`): copy `/opt/gelp/.env.prod.example` to `/opt/gelp/.env.prod` (gitignored), fill in real values; the `DATABASE_URL` password must be the `GELP_DB_PASSWORD` from the provisioning step. `deploy/deploy.sh` turns it into the `gelp-env` Secret — real values never leave that file. Then:
+1. **DB:** provision gelp's database/role on the shared Postgres — in the platform
+   repo, `cluster/data-postgres/provision-db.sh` with `PROVISION_APPS="gelp"`
+   (keep the generated password for the next step).
+2. **App config (`.env.prod`):** copy `/opt/gelp/.env.prod.example` to
+   `/opt/gelp/.env.prod` (gitignored), fill in real values; the `DATABASE_URL`
+   password must match the one provisioning set. `deploy/deploy.sh` turns it into
+   the `gelp-env` Secret — real values never leave that file. Then
+   `sudo bash /opt/gelp/deploy/deploy.sh`.
+3. **Push-to-deploy:** the `deploy-gelp` hook is defined in the platform repo's
+   `webhook/hooks.json` and rendered onto the node by its
+   `bootstrap/install-webhook.sh`. Point the GitHub webhook (Settings → Webhooks)
+   at `http://deploy.lans-h.cc:9000/hooks/deploy-gelp`, content type
+   `application/json`, secret = the `GELP_WEBHOOK_SECRET` used by
+   install-webhook.sh, events: just pushes. Every push to `main` then rebuilds the
+   image on the node and rolls the deployment.
 
-   ```sh
-   sudo bash /opt/gelp/deploy/deploy.sh
-   ```
-
-3. **Push-to-deploy:** in the GitHub repo, Settings → Webhooks → Add webhook. Payload URL `http://<public-ip>:9000/hooks/deploy`, content type `application/json`, secret = the `WEBHOOK_SECRET` you passed to `setup-server.sh`, events: just pushes. Every push to `main` then rebuilds the image on the server and rolls the deployment.
-
-Let's Encrypt certificates are issued automatically by cert-manager once DNS resolves to the instance.
+TLS is automatic — the platform's `*.lans-h.cc` wildcard cert covers
+`gelp.lans-h.cc` (Traefik's default certificate), so the Ingress needs no `tls`
+block of its own, and the wildcard DNS record already resolves the host.
 
 ## 5. Repo map
 
@@ -197,6 +205,6 @@ app/                  Next.js routes (three-column UI at /, /import, /login, API
 lib/                  Takeout parser, import pipeline, Places client, Drive sync, Drizzle schema
 drizzle/              generated SQL migrations (applied automatically at startup)
 scripts/selfcheck.ts  offline end-to-end check of the import pipeline
-deploy/               Dockerfile, Kustomize k8s (base + staging/prod overlays), stage.sh, deploy.sh, setup-server.sh, webhook config
+deploy/               Dockerfile, Kustomize k8s (base + staging/prod overlays), stage.sh, deploy.sh, setup-server.sh (onboarding onto the platform node)
 .env.example          every environment variable, documented
 ```

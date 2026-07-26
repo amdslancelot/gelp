@@ -24,17 +24,19 @@ per cluster.
 - `k8s/overlays/staging/` — upstream Kubernetes (minikube), namespace
   `gelp-staging`, locally built image, `staging.localhost` ingress. The
   `gelp-env` Secret is created from your `.env` at deploy time (no secret YAML).
-- `k8s/overlays/prod/` — k3s on OCI, namespace `gelp`, HTTPS via cert-manager +
-  Let's Encrypt over Traefik. **Deferred**: authored but not yet exercised
-  end-to-end. The `gelp-env` Secret is created from a server-local `.env.prod`.
+- `k8s/overlays/prod/` — k3s on the shared platform node, namespace `gelp`.
+  **Live.** TLS is the platform's `*.lans-h.cc` wildcard cert (Traefik's default
+  certificate) — the Ingress carries no `tls` block and no per-app cert-manager
+  annotation. The `gelp-env` Secret is created from a server-local `.env.prod`.
 - `stage.sh` — preflight-check the shared Postgres → build with podman → load
   into minikube → apply the staging app overlay → create `gelp-env` from `.env`.
   No registry, no Docker.
-- `deploy.sh` — prod build-and-deploy on the server; run by the webhook on every
-  push to `main`, and safe to run by hand.
-- `setup-server.sh` — one-time root bootstrap of an existing Oracle Linux 9 ARM
-  host. See section 4 of the root README.
-- `webhook/` — `adnanh/webhook` config that runs `deploy.sh` on a push to `main`.
+- `deploy.sh` — prod build-and-deploy on the node; run by the platform's shared
+  webhook listener on every push to `main`, and safe to run by hand.
+- `setup-server.sh` — one-time onboarding of gelp onto a node the **platform**
+  repo has already bootstrapped (clone to /opt/gelp + first deploy). The node
+  itself — k3s/Traefik, the webhook listener + `deploy-gelp` hook, cert-manager
+  and the wildcard cert — is owned by the platform repo, not here.
 
 ## Staging (local Kubernetes)
 
@@ -68,16 +70,17 @@ URI in the Google Cloud console.
 
 ## Manual prod deploy
 
-On the server (repo checked out at `/opt/gelp`):
+On the node (repo checked out at `/opt/gelp`):
 
 ```sh
 ./deploy/deploy.sh
 ```
 
-This pulls the latest commit, installs cert-manager on first run, builds the
-image (docker or podman, whichever is present) and imports it into k3s's
-containerd, renders the prod overlay (`kubectl kustomize` + `envsubst` for
-`${GELP_HOST}`/`${LETSENCRYPT_EMAIL}`), applies it, and rolls out the new image.
+This pulls the latest commit, builds the image (docker or podman, whichever is
+present) and imports it into k3s's containerd, applies the prod overlay
+(`kubectl kustomize` — the host `gelp.lans-h.cc` is baked into the overlay, no
+substitution), and rolls out the new image. TLS, the webhook listener, and the
+shared Postgres are provided by the platform repo, not by this script.
 
 ## Creating the prod config
 
@@ -111,6 +114,9 @@ the most recent `gelp-import-*` pod to debug.
 
 ## Automatic deploys
 
-`webhook/hooks.json` configures `adnanh/webhook` (running as a systemd service
-on port 9000) to run `deploy.sh` on a signed push to `refs/heads/main`. See
-`webhook/README.md` for pointing the GitHub webhook at the listener.
+Deploys are driven by the **platform** repo's shared `adnanh/webhook` listener
+(systemd service on port 9000): a signed push to `refs/heads/main` runs
+`deploy.sh`. The `deploy-gelp` hook lives in the platform repo's
+`webhook/hooks.json` (rendered onto the node by its
+`bootstrap/install-webhook.sh`), and the GitHub webhook points at
+`http://deploy.lans-h.cc:9000/hooks/deploy-gelp`.
