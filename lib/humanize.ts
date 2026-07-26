@@ -7,3 +7,11 @@ export function humanizeCategory(category: string): string {
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }
+
+// Present a list's stored name for display. Takeout labels the starred-places
+// list "Saved Places"; Google Maps itself now calls it "Starred places", so we
+// match that. The stored name is left untouched so re-imports still match by it.
+export function displayListName(name: string): string {
+  if (name === "Saved Places") return "Starred places";
+  return name;
+}

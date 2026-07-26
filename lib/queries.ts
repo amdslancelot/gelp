@@ -59,8 +59,9 @@ export async function loadLists(userId: string): Promise<ListView[]> {
   }
 
   // Pin Google Maps' built-in lists to the top, in this order, then present
-  // the rest alphabetically for a stable left column.
-  const pinned = ["Favorite places", "Want to go"];
+  // the rest alphabetically for a stable left column. "Saved Places" is the
+  // starred-places list (shown as "Starred places" in the UI).
+  const pinned = ["Favorite places", "Want to go", "Saved Places"];
   const rank = (name: string) => {
     const i = pinned.indexOf(name);
     return i === -1 ? pinned.length : i;

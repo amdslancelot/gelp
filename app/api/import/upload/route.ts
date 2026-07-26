@@ -38,13 +38,41 @@ export async function POST(req: Request) {
   }
 
   const db = await getDb();
-  const result = await runImport(
-    db,
-    session.user.id,
-    parsed,
-    createPlacesClient(),
-    "upload",
-  );
+  const userId = session.user.id;
 
-  return NextResponse.json(result);
+  // Stream the import as newline-delimited JSON: a "progress" line per place so
+  // the client can drive a progress bar, then a terminal "done" (with the
+  // counts) or "error" line. The whole run happens inside the stream so a large
+  // Takeout with many Places API calls reports incrementally instead of
+  // blocking on one long request.
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) =>
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      try {
+        const result = await runImport(
+          db,
+          userId,
+          parsed,
+          createPlacesClient(),
+          "upload",
+          (p) => send({ type: "progress", ...p }),
+        );
+        send({ type: "done", result });
+      } catch {
+        send({ type: "error", error: "Import failed" });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

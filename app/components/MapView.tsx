@@ -63,11 +63,20 @@ function MapController({ places, focus }: MapViewProps) {
   const map = useMap();
 
   useEffect(() => {
-    if (focus && focus.lat != null && focus.lng != null) {
-      map.flyTo([focus.lat, focus.lng], 16, { duration: 0.6 });
+    // On mobile the map lives in a display:none pane until the Map tab is shown.
+    // Flying or fitting before Leaflet has re-measured the now-visible container
+    // does pixel math against a 0×0 size and produces an (NaN, NaN) center that
+    // throws "Invalid LatLng". Re-measure first so the size is real.
+    map.invalidateSize();
+    if (focus && Number.isFinite(focus.lat) && Number.isFinite(focus.lng)) {
+      map.flyTo([focus.lat as number, focus.lng as number], 16, {
+        duration: 0.6,
+      });
       return;
     }
-    const withCoords = places.filter((p) => p.lat != null && p.lng != null);
+    const withCoords = places.filter(
+      (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
+    );
     if (withCoords.length === 0) return;
     const bounds = L.latLngBounds(
       withCoords.map((p) => [p.lat as number, p.lng as number]),
@@ -75,6 +84,23 @@ function MapController({ places, focus }: MapViewProps) {
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
   }, [map, places, focus]);
 
+  return null;
+}
+
+// Leaflet computes its pixel size once at init. When the map starts life inside
+// a hidden pane (the mobile List/Map toggle uses display:none) it initializes at
+// the wrong size and renders into a corner once shown. A ResizeObserver on the
+// container fires when it goes from 0×0 to visible, and invalidateSize() makes
+// Leaflet re-measure and repaint to fill the pane. It also keeps the map correct
+// across window resizes on desktop.
+function InvalidateOnResize() {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [map]);
   return null;
 }
 
@@ -97,7 +123,9 @@ function FlyToLocation({
 }
 
 export default function MapView({ places, focus }: MapViewProps) {
-  const withCoords = places.filter((p) => p.lat != null && p.lng != null);
+  const withCoords = places.filter(
+    (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
+  );
   const [myPos, setMyPos] = useState<[number, number] | null>(null);
   const [flyTick, setFlyTick] = useState(0);
   const [geoError, setGeoError] = useState<string | null>(null);
@@ -218,6 +246,7 @@ export default function MapView({ places, focus }: MapViewProps) {
         )}
         <MapController places={places} focus={focus} />
         <FlyToLocation pos={myPos} tick={flyTick} />
+        <InvalidateOnResize />
       </MapContainer>
 
       <button

@@ -13,6 +13,17 @@ export interface ImportResult {
   apiCalls: number;
 }
 
+// A live progress tick emitted as places are processed, so the upload UI can
+// render a progress bar. `processed`/`total` count places (the slow, API-bound
+// unit of work); `currentList` names the list being worked on right now.
+export interface ImportProgress {
+  processed: number;
+  total: number;
+  listsDone: number;
+  totalLists: number;
+  currentList: string;
+}
+
 // Compute the enrichment cache key for a place. Using the Maps URL when present
 // makes the key stable across re-imports; otherwise fall back to the title and
 // address. This is what caps each real place at one Places API call ever.
@@ -33,6 +44,7 @@ export async function runImport(
   parsed: ParsedTakeout,
   client: PlacesClient,
   source: "upload" | "drive",
+  onProgress?: (p: ImportProgress) => void,
 ): Promise<ImportResult> {
   const result: ImportResult = {
     lists: 0,
@@ -40,6 +52,10 @@ export async function runImport(
     cacheHits: 0,
     apiCalls: 0,
   };
+
+  // Precomputed denominators so the UI can show a stable "x / total" bar.
+  const totalPlaces = parsed.lists.reduce((n, l) => n + l.places.length, 0);
+  const totalLists = parsed.lists.length;
 
   for (const parsedList of parsed.lists) {
     result.lists += 1;
@@ -137,6 +153,14 @@ export async function runImport(
         note: parsedPlace.note ?? null,
         mapsUrl: parsedPlace.mapsUrl ?? null,
         cacheKey: key,
+      });
+
+      onProgress?.({
+        processed: result.places,
+        total: totalPlaces,
+        listsDone: result.lists - 1,
+        totalLists,
+        currentList: parsedList.name,
       });
     }
   }

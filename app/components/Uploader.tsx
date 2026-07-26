@@ -10,8 +10,17 @@ interface ImportResult {
   apiCalls: number;
 }
 
-// Drag-and-drop / file-input uploader that posts a Takeout zip and reports the
-// import counts returned by the server.
+interface Progress {
+  processed: number;
+  total: number;
+  listsDone: number;
+  totalLists: number;
+  currentList: string;
+}
+
+// Drag-and-drop / file-input uploader that posts a Takeout zip, renders a live
+// progress bar from the server's streamed updates, and jumps to the list
+// browser once the import finishes.
 export default function Uploader() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -19,6 +28,8 @@ export default function Uploader() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [done, setDone] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
   const upload = useCallback(
@@ -28,6 +39,8 @@ export default function Uploader() {
       setBusy(true);
       setError(null);
       setResult(null);
+      setProgress(null);
+      setDone(false);
       try {
         const body = new FormData();
         body.append("file", file);
@@ -35,12 +48,58 @@ export default function Uploader() {
           method: "POST",
           body,
         });
-        const data = await res.json();
-        if (!res.ok) {
+
+        // Errors before the import starts (bad zip, auth) come back as plain
+        // JSON, not the stream.
+        const contentType = res.headers.get("content-type") ?? "";
+        if (!res.ok || !contentType.includes("x-ndjson")) {
+          const data = await res.json().catch(() => ({}));
           setError(data.error ?? "Import failed");
-        } else {
-          setResult(data as ImportResult);
+          return;
+        }
+
+        if (!res.body) {
+          setError("Import failed");
+          return;
+        }
+
+        // Read the newline-delimited JSON stream, updating the bar per line.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let final: ImportResult | null = null;
+        let failed: string | null = null;
+
+        for (;;) {
+          const { done: streamDone, value } = await reader.read();
+          if (streamDone) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const msg = JSON.parse(line);
+            if (msg.type === "progress") {
+              setProgress(msg as Progress);
+            } else if (msg.type === "done") {
+              final = msg.result as ImportResult;
+            } else if (msg.type === "error") {
+              failed = msg.error ?? "Import failed";
+            }
+          }
+        }
+
+        if (failed) {
+          setError(failed);
+          return;
+        }
+        if (final) {
+          setResult(final);
+          setDone(true);
+          // Refresh so the server-rendered list browser picks up the new data,
+          // then jump to it.
           router.refresh();
+          setTimeout(() => router.push("/"), 900);
         }
       } catch {
         setError("Upload failed");
@@ -51,6 +110,13 @@ export default function Uploader() {
     },
     [router],
   );
+
+  const pct =
+    progress && progress.total > 0
+      ? Math.round((progress.processed / progress.total) * 100)
+      : busy
+        ? 0
+        : null;
 
   return (
     <div>
@@ -77,9 +143,15 @@ export default function Uploader() {
         } ${dragOver ? "border-rose-400 bg-rose-50" : ""}`}
       >
         <p className="text-sm font-medium text-neutral-700">
-          {busy ? "Importing…" : "Drop your Takeout zip here"}
+          {done ? "Import complete" : busy ? "Importing…" : "Drop your Takeout zip here"}
         </p>
-        <p className="mt-1 text-xs text-neutral-400">or click to choose a file</p>
+        <p className="mt-1 text-xs text-neutral-400">
+          {done
+            ? "Taking you to your lists…"
+            : busy
+              ? "Keep this tab open until it finishes"
+              : "or click to choose a file"}
+        </p>
         <input
           ref={inputRef}
           type="file"
@@ -92,6 +164,32 @@ export default function Uploader() {
           }}
         />
       </div>
+
+      {pct !== null && (
+        <div className="mt-4">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200">
+            <div
+              className="h-full rounded-full bg-rose-500 transition-all duration-300 ease-out"
+              style={{ width: `${done ? 100 : pct}%` }}
+            />
+          </div>
+          <div className="mt-2 flex items-center justify-between text-xs text-neutral-500">
+            <span className="truncate">
+              {done
+                ? "Done"
+                : progress
+                  ? `Importing “${progress.currentList}” · list ${
+                      progress.listsDone + 1
+                    }/${progress.totalLists}`
+                  : "Reading your export…"}
+            </span>
+            <span className="ml-2 shrink-0 tabular-nums">
+              {progress ? `${progress.processed}/${progress.total}` : ""}{" "}
+              {done ? "100%" : `${pct}%`}
+            </span>
+          </div>
+        </div>
+      )}
 
       {error && (
         <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
