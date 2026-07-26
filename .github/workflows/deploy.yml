@@ -1,0 +1,46 @@
+name: CI / Deploy
+
+# Test-gated deploy. A push to main is NOT deployed until the build passes;
+# only then does this workflow poke the platform node's webhook (:9000) — the
+# same listener a raw GitHub webhook would hit, but now behind a green build.
+#
+# One-time setup on the repo:
+#   Settings → Secrets and variables → Actions → New repository secret
+#     DEPLOY_WEBHOOK_SECRET = the node's GELP_WEBHOOK_SECRET (same value that
+#     /etc/webhook/hooks.json uses for the deploy-gelp hook).
+#   Then DELETE the repo's native push webhook (Settings → Webhooks) so pushes
+#   deploy ONLY through this gated path, not the ungated native one.
+on:
+  push:
+    branches: [main]      # deploy path; PRs (incl. forks) never run deploy or see the secret
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # `next build` type-checks (tsc) and lints (eslint) by default, then
+      # compiles every route — a real gate even before unit tests exist.
+      - run: npm run build
+
+  deploy:
+    needs: build          # gate: deploy runs only if build succeeded
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the node webhook (HMAC-signed, matches hooks.json deploy-gelp)
+        env:
+          SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+        run: |
+          body='{"ref":"refs/heads/main"}'
+          # printf (no trailing newline) so the signed bytes match what --data
+          # sends; otherwise the HMAC differs and the hook rejects the delivery.
+          sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+          curl -fsS -X POST http://deploy.lans-h.cc:9000/hooks/deploy-gelp \
+            -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: sha256=$sig" \
+            --data "$body"
