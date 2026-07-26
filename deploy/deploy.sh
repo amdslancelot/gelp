@@ -61,20 +61,21 @@ else
   exit 1
 fi
 
-echo "==> Building gelp:latest with ${CONTAINER_TOOL}"
-"${CONTAINER_TOOL}" build -f deploy/Dockerfile -t gelp:latest .
+# Build and import under an explicit localhost/ name. The prod overlay's
+# images transformer sets the pod spec to localhost/gelp:latest, and
+# containerd treats "localhost" as the registry host — so it uses the imported
+# local image directly, never normalizing a bare name to docker.io/library/
+# and never attempting a registry pull. This is also exactly the name podman
+# gives an unqualified build, so no retag is needed.
+IMAGE="localhost/gelp:latest"
+echo "==> Building ${IMAGE} with ${CONTAINER_TOOL}"
+"${CONTAINER_TOOL}" build -f deploy/Dockerfile -t "${IMAGE}" .
 
-echo "==> Importing gelp:latest into k3s containerd"
+echo "==> Importing ${IMAGE} into k3s containerd"
 if [ "${CONTAINER_TOOL}" = "podman" ]; then
-  # Save under the fully-qualified docker.io/library/ name: podman stores an
-  # unqualified build tag as localhost/gelp:latest, but the kubelet resolves
-  # the pod spec's bare "gelp:latest" to docker.io/library/gelp:latest — the
-  # imported name has to match or containerd ignores the local image and tries
-  # a registry pull (which fails: there is no such public image).
-  podman tag gelp:latest docker.io/library/gelp:latest
-  podman save --format docker-archive docker.io/library/gelp:latest | k3s ctr images import -
+  podman save --format docker-archive "${IMAGE}" | k3s ctr images import -
 else
-  docker save gelp:latest | k3s ctr images import -
+  docker save "${IMAGE}" | k3s ctr images import -
 fi
 
 # ---------------------------------------------------------------------------

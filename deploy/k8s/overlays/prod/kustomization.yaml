@@ -17,6 +17,7 @@ resources:
 
 images:
   - name: gelp
+    newName: localhost/gelp
     newTag: latest
 
 # Set the real host on the base ingress (which ships a placeholder host for
