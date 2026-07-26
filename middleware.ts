@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import { authConfig } from "./auth.config";
+import { mobileDebugEnabled } from "@/lib/mobile-debug";
 
 // Build an edge-safe auth instance purely for route protection. The full
 // database-backed config is used only in the Node.js runtime.
@@ -14,6 +15,11 @@ const PUBLIC_PREFIXES = [
 ];
 
 export default auth((req) => {
+  // Mobile debug mode (see lib/mobile-debug.ts): let every request through so a
+  // phone can reach the app over a bare LAN IP without the Google login
+  // round-trip. Inert in production.
+  if (mobileDebugEnabled) return;
+
   const { pathname } = req.nextUrl;
 
   const isPublic = PUBLIC_PREFIXES.some(

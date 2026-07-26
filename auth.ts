@@ -4,10 +4,11 @@ import { eq } from "drizzle-orm";
 import { authConfig } from "./auth.config";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
+import { mobileDebugEmail } from "@/lib/mobile-debug";
 
 // Full NextAuth configuration. This module touches the database and therefore
 // runs only in the Node.js runtime (never the edge middleware).
-export const { handlers, auth, signIn, signOut } = NextAuth({
+const nextAuth = NextAuth({
   ...authConfig,
   session: { strategy: "jwt" },
   callbacks: {
@@ -69,3 +70,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
 });
+
+export const { handlers, signIn, signOut } = nextAuth;
+
+// Mobile debug mode (see lib/mobile-debug.ts): when enabled, resolve the
+// configured user's id from the database and hand back a synthetic session,
+// bypassing Google OAuth so a phone on the LAN can browse over plain http. The
+// switch is inert in production, so `auth` is the real NextAuth handler there.
+async function mobileDebugAuth() {
+  const db = await getDb();
+  const row = (
+    await db
+      .select()
+      .from(users)
+      .where(eq(users.email, mobileDebugEmail!))
+      .limit(1)
+  )[0];
+  if (!row) {
+    throw new Error(
+      `MOBILE_DEBUG_LOGIN="${mobileDebugEmail}" but no user with that email exists.`,
+    );
+  }
+  return { user: { id: row.id, email: row.email }, expires: "" };
+}
+
+export const auth: typeof nextAuth.auth = mobileDebugEmail
+  ? (mobileDebugAuth as unknown as typeof nextAuth.auth)
+  : nextAuth.auth;
+
+if (mobileDebugEmail) {
+  console.warn(
+    `⚠️  Mobile debug mode ON — Google login bypassed, every request is "${mobileDebugEmail}". Never enable in production.`,
+  );
+}
