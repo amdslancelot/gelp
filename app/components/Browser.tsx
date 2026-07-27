@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { ListView, PlaceView } from "@/lib/queries";
+import type { MapBounds } from "./MapView";
 import { displayListName, humanizeCategory } from "@/lib/humanize";
 
 // Leaflet touches `window`, so the map is loaded only on the client.
@@ -18,12 +19,34 @@ const MapView = dynamic(() => import("./MapView"), {
 // A special filter value meaning "no category filter applied".
 const ALL = "__all__";
 
+// True when a place's coordinates fall inside the map's current viewport. The
+// longitude test tolerates a viewport that straddles the antimeridian (where
+// west > east). Places without coordinates aren't on the map, so they're out.
+function inBounds(p: PlaceView, b: MapBounds): boolean {
+  if (p.lat == null || p.lng == null) return false;
+  const latOk = p.lat >= b.south && p.lat <= b.north;
+  const lngOk =
+    b.west <= b.east
+      ? p.lng >= b.west && p.lng <= b.east
+      : p.lng >= b.west || p.lng <= b.east;
+  return latOk && lngOk;
+}
+
 export default function Browser({ lists }: { lists: ListView[] }) {
   const [selectedListId, setSelectedListId] = useState<string | null>(
     lists[0]?.id ?? null,
   );
   const [category, setCategory] = useState<string>(ALL);
   const [focus, setFocus] = useState<PlaceView | null>(null);
+  // When on, the middle-column list is narrowed to places inside the map's
+  // current viewport. `mapBounds` is the latest viewport reported by the map.
+  const [filterToView, setFilterToView] = useState(true);
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
+  // Stable so MapView's bounds subscription isn't torn down on every render.
+  const handleBoundsChange = useCallback(
+    (b: MapBounds) => setMapBounds(b),
+    [],
+  );
   // Mobile-only view state: which pane is showing, and whether the lists drawer
   // is open. Both are inert at md+ where all three columns are visible at once.
   const [mobileTab, setMobileTab] = useState<"list" | "map">("list");
@@ -43,18 +66,29 @@ export default function Browser({ lists }: { lists: ListView[] }) {
     return Array.from(set).sort();
   }, [selectedList]);
 
-  // Places shown in the middle column and mapped, after category filtering.
+  // Places mapped (all markers for the selected list), after category filtering.
   const visiblePlaces = useMemo(() => {
     const all = selectedList?.places ?? [];
     if (category === ALL) return all;
     return all.filter((p) => p.category === category);
   }, [selectedList, category]);
 
+  // Places shown in the middle column: the mapped set, optionally narrowed to
+  // the map's current viewport. Until the map reports its first bounds we show
+  // everything, so the list is never empty on load.
+  const listedPlaces = useMemo(() => {
+    if (!filterToView || !mapBounds) return visiblePlaces;
+    return visiblePlaces.filter((p) => inBounds(p, mapBounds));
+  }, [visiblePlaces, filterToView, mapBounds]);
+
   const selectList = (id: string) => {
     setSelectedListId(id);
     setCategory(ALL);
     setFocus(null);
     setDrawerOpen(false);
+    // Drop the stale viewport so the new list shows all its places immediately;
+    // the map re-fits to the new markers and reports fresh bounds a beat later.
+    setMapBounds(null);
   };
 
   // Tapping a place focuses it and, on mobile, flips to the map so the pin is
@@ -126,6 +160,18 @@ export default function Browser({ lists }: { lists: ListView[] }) {
             onClick={() => setCategory(c)}
           />
         ))}
+        {/* Toggle: narrow the list to what's inside the current map viewport. */}
+        <button
+          onClick={() => setFilterToView((v) => !v)}
+          aria-pressed={filterToView}
+          className={`ml-auto shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
+            filterToView
+              ? "border-rose-500 bg-rose-500 text-white"
+              : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
+          }`}
+        >
+          In map view
+        </button>
       </div>
 
       {/* Middle column: places in the selected list. On mobile it shares the
@@ -136,7 +182,7 @@ export default function Browser({ lists }: { lists: ListView[] }) {
         }`}
       >
         <ul className="flex-1 overflow-y-auto divide-y divide-neutral-100">
-          {visiblePlaces.map((p) => (
+          {listedPlaces.map((p) => (
             <li key={p.id}>
               <button
                 onClick={() => selectPlace(p)}
@@ -165,9 +211,11 @@ export default function Browser({ lists }: { lists: ListView[] }) {
               </button>
             </li>
           ))}
-          {visiblePlaces.length === 0 && (
+          {listedPlaces.length === 0 && (
             <li className="px-4 py-6 text-sm text-neutral-400">
-              No places to show.
+              {filterToView && mapBounds && visiblePlaces.length > 0
+                ? "No places in this area — zoom out or pan the map."
+                : "No places to show."}
             </li>
           )}
         </ul>
@@ -179,7 +227,11 @@ export default function Browser({ lists }: { lists: ListView[] }) {
           mobileTab === "list" ? "hidden" : "block"
         }`}
       >
-        <MapView places={visiblePlaces} focus={focus} />
+        <MapView
+          places={visiblePlaces}
+          focus={focus}
+          onBoundsChange={handleBoundsChange}
+        />
       </section>
 
       {/* Mobile lists drawer. */}

@@ -13,6 +13,15 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { PlaceView } from "@/lib/queries";
 
+// The map's current viewport, reported to the parent as plain numbers so the
+// list can be filtered to what's on screen without leaking Leaflet types out.
+export interface MapBounds {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+}
+
 // Fix Leaflet's default marker icons, whose relative URLs break under bundlers.
 // CDN URLs sidestep the classic broken-image problem without asset config.
 const icon = L.icon({
@@ -30,6 +39,9 @@ interface MapViewProps {
   places: PlaceView[];
   // The place to pan/zoom to, if any.
   focus: PlaceView | null;
+  // Called whenever the viewport settles (pan/zoom end), so the parent can
+  // narrow the list to places within view. Optional.
+  onBoundsChange?: (bounds: MapBounds) => void;
 }
 
 // Turn a raw GeolocationPositionError into an actionable message. The default
@@ -87,6 +99,34 @@ function MapController({ places, focus }: MapViewProps) {
   return null;
 }
 
+// Report the visible bounds to the parent whenever the viewport settles.
+// `moveend` fires after both pans and zooms (and after the initial fitBounds),
+// so it's the single signal we need. The parent uses it to filter the list.
+function BoundsReporter({
+  onBoundsChange,
+}: {
+  onBoundsChange?: (bounds: MapBounds) => void;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (!onBoundsChange) return;
+    const report = () => {
+      const b = map.getBounds();
+      onBoundsChange({
+        south: b.getSouth(),
+        west: b.getWest(),
+        north: b.getNorth(),
+        east: b.getEast(),
+      });
+    };
+    map.on("moveend", report);
+    return () => {
+      map.off("moveend", report);
+    };
+  }, [map, onBoundsChange]);
+  return null;
+}
+
 // Leaflet computes its pixel size once at init. When the map starts life inside
 // a hidden pane (the mobile List/Map toggle uses display:none) it initializes at
 // the wrong size and renders into a corner once shown. A ResizeObserver on the
@@ -122,7 +162,11 @@ function FlyToLocation({
   return null;
 }
 
-export default function MapView({ places, focus }: MapViewProps) {
+export default function MapView({
+  places,
+  focus,
+  onBoundsChange,
+}: MapViewProps) {
   const withCoords = places.filter(
     (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
   );
@@ -246,6 +290,7 @@ export default function MapView({ places, focus }: MapViewProps) {
         )}
         <MapController places={places} focus={focus} />
         <FlyToLocation pos={myPos} tick={flyTick} />
+        <BoundsReporter onBoundsChange={onBoundsChange} />
         <InvalidateOnResize />
       </MapContainer>
 
