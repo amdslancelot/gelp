@@ -6,12 +6,15 @@ import { mobileDebugEnabled } from "@/lib/mobile-debug";
 // database-backed config is used only in the Node.js runtime.
 const { auth } = NextAuth(authConfig);
 
-// Paths that are always reachable without a session.
+// Paths that are always reachable without a session. `/s` is the read-only
+// shared-map view: the token in the path is its own authority, and requiring a
+// session there would defeat the point of a link you can hand to anyone.
 const PUBLIC_PREFIXES = [
   "/login",
   "/api/health",
   "/api/cron/import",
   "/api/auth",
+  "/s",
 ];
 
 export default auth((req) => {

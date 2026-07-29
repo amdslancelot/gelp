@@ -15,6 +15,20 @@
       "when": 1784794111952,
       "tag": "0001_left_firelord",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785281971171,
+      "tag": "0002_closed_quasimodo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785284341295,
+      "tag": "0003_spooky_tempest",
+      "breakpoints": true
     }
   ]
 }
