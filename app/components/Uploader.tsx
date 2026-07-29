@@ -8,6 +8,7 @@ interface ImportResult {
   places: number;
   cacheHits: number;
   apiCalls: number;
+  listsRemoved: number;
 }
 
 interface Progress {
@@ -198,11 +199,13 @@ export default function Uploader() {
       )}
 
       {result && (
-        <div className="mt-4 grid grid-cols-4 gap-3">
+        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-5">
           <Stat label="Lists" value={result.lists} />
           <Stat label="Places" value={result.places} />
           <Stat label="Cache hits" value={result.cacheHits} />
           <Stat label="API calls" value={result.apiCalls} />
+          {/* Lists the export no longer has, deleted to match it. */}
+          <Stat label="Removed" value={result.listsRemoved} />
         </div>
       )}
     </div>

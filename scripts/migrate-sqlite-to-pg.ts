@@ -112,6 +112,13 @@ async function main() {
     lng: r.lng,
     category: r.category,
     types: r.types,
+    // The SQLite schema predates `status`. Mirror migration 0002's backfill: a
+    // row that never resolved is treated as a failed lookup, so it is retried
+    // once rather than kept as a permanent blank.
+    status:
+      r.lat === null && r.place_id === null
+        ? ("unavailable" as const)
+        : ("ok" as const),
     fetchedAt: r.fetched_at,
   }));
   const listsRows = srcLists.map((r) => ({

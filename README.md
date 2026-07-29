@@ -31,7 +31,37 @@ Everything lives in one GCP project (create one at <https://console.cloud.google
    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<your-host>/api/cron/import
    ```
 
-Re-imports are idempotent: each list is replaced wholesale, and the place cache means already-seen places cost zero API calls.
+Re-imports are idempotent: a list is identified by its name within an account
+(`lists` is unique on `(user_id, name)`), so re-importing replaces its places
+wholesale rather than duplicating the list — even if an upload and the nightly
+sync overlap. Each list is swapped in a single transaction, so an import that
+dies partway rolls back to what was there before instead of leaving a list
+half-filled. A Takeout export is a complete snapshot, so a list missing from it
+was deleted in Google Maps and is deleted here too — with one guard: an export
+that parses to zero lists deletes nothing, since a broken download must not be
+read as "the account is empty now".
+
+The place cache means an already-seen place costs zero API calls. A place the
+API cannot resolve is cached too, so a miss is not re-billed on every import,
+but with a lifetime: a genuine "no such place" is kept for 30 days, while a
+failed lookup (HTTP error, network, missing API key) is kept only 6 hours, so an
+outage cannot blank out a place permanently.
+
+### Sharing your map
+
+**Share** in the header issues one read-only link to your whole map:
+`https://<host>/s/<token>`. Whoever opens it browses your lists and their places
+— notes included — on the same three-column view, signed in to nothing. Lists
+you have hidden stay hidden, and there is nothing on the page that can change
+anything.
+
+The token is 192 bits from a CSPRNG and is the entire permission: no session is
+required, so treat the link itself as the secret. The page is marked `noindex`,
+so it is unlisted rather than public. One link exists per account — pressing
+Share again returns the same link rather than breaking one you already sent.
+**New link** replaces it and **Stop sharing** removes it; either way the
+previous URL stops resolving immediately (a 404, indistinguishable from a token
+that never existed). The link always reflects your latest import.
 
 ## 3. Development & staging
 
@@ -201,8 +231,8 @@ block of its own, and the wildcard DNS record already resolves the host.
 ## 5. Repo map
 
 ```
-app/                  Next.js routes (three-column UI at /, /import, /login, API routes)
-lib/                  Takeout parser, import pipeline, Places client, Drive sync, Drizzle schema
+app/                  Next.js routes (three-column UI at /, /import, /login, /s/<token>, API routes)
+lib/                  Takeout parser, import pipeline, Places client, Drive sync, share links, Drizzle schema
 drizzle/              generated SQL migrations (applied automatically at startup)
 scripts/selfcheck.ts  offline end-to-end check of the import pipeline
 deploy/               Dockerfile, Kustomize k8s (base + staging/prod overlays), stage.sh, deploy.sh, setup-server.sh (onboarding onto the platform node)

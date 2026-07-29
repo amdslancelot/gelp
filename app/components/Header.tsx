@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { auth, signOut } from "@/auth";
+import ShareButton from "./ShareButton";
 
 // Top application bar: brand, the import link, and the signed-in user's
 // identity with a sign-out control.
@@ -25,6 +26,7 @@ export default async function Header() {
       </div>
       {user && (
         <div className="flex items-center gap-3">
+          <ShareButton />
           {user.image && (
             // eslint-disable-next-line @next/next/no-img-element
             <img

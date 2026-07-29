@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
 import { lists, placeCache, places } from "./db/schema";
+import { resolveShare } from "./share";
 
 // A place as presented to the UI, joined with its enrichment cache.
 export interface PlaceView {
@@ -70,4 +71,30 @@ export async function loadLists(userId: string): Promise<ListView[]> {
   };
   views.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
   return views;
+}
+
+// A map as seen by someone holding a share link.
+export interface SharedMap {
+  // The owner's display name, for a "shared by" line. Their email is
+  // deliberately not part of this: the link is meant to be passed around, and
+  // an address is not something the owner chose to hand out with it.
+  ownerName: string | null;
+  lists: ListView[];
+}
+
+// Resolve a share token to the map it points at, or null if no such token
+// exists — which is also what a revoked link now looks like.
+//
+// This is the one read path with no session behind it, so it takes the token as
+// its only authority and derives the user id from the row: nothing here trusts
+// a user id supplied by the caller.
+export async function loadSharedMap(token: string): Promise<SharedMap | null> {
+  const db = await getDb();
+
+  const share = await resolveShare(db, token);
+  if (!share) return null;
+
+  // Hidden lists stay hidden: loadLists already filters them out, so a list the
+  // owner hid is not exposed by the share link either.
+  return { ownerName: share.ownerName, lists: await loadLists(share.userId) };
 }
