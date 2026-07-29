@@ -103,14 +103,31 @@ prints a loud warning and continues; the pod stays unready until it exists.
 
 ## How the nightly import works
 
-The `gelp-import` CronJob (`deploy/k8s/base/cronjob.yaml`) runs at 03:30 server
-time nightly. A small `curlimages/curl` container `POST`s to `http://gelp/api/cron/import`
-— the app's own Service, addressed namespace-relative so the same manifest works
-in any namespace — with an `Authorization: Bearer $CRON_SECRET` header from the
+The `gelp-import` CronJob (`deploy/k8s/base/cronjob.yaml`) is scheduled for
+03:30 server time nightly, and **ships suspended** (`suspend: true`). A small
+`curlimages/curl` container `POST`s to `http://gelp/api/cron/import` — the app's
+own Service, addressed namespace-relative so the same manifest works in any
+namespace — with an `Authorization: Bearer $CRON_SECRET` header from the
 `gelp-env` Secret and `--fail-with-body` so a non-2xx shows up as a failed Job.
 `restartPolicy: Never` + a small `backoffLimit` mean a failing import retries a
 few times then gives up; check `kubectl get jobs -n gelp` / `kubectl logs` on
 the most recent `gelp-import-*` pod to debug.
+
+**Why suspended.** The endpoint is a no-op until Drive sync is configured: it
+returns `503 Drive sync is not configured` unless both
+`GOOGLE_SERVICE_ACCOUNT_KEY_BASE64` and `DRIVE_FOLDER_ID` are present in
+`gelp-env`. Neither has ever been set in prod, so the job failed every night
+from the day it was deployed and reported nothing else — noise that would drown
+out a real import failure later.
+
+**To enable:** add both variables to the server-local `/opt/gelp/.env.prod`
+(step 3 of the root `README.md` covers minting the service-account key and
+sharing the Drive folder with it), set `suspend: false` in
+`deploy/k8s/base/cronjob.yaml`, and redeploy — `deploy.sh` rebuilds the Secret
+from `.env.prod` and re-applies the manifest. Note that this single-tenant path
+(one service account, one folder, importing for `allowedEmails()[0]`) is slated
+for replacement by per-user Drive OAuth — see `TODO.md`, "Per-user nightly Drive
+Takeout auto-sync" — which makes both variables obsolete.
 
 ## Automatic deploys
 
