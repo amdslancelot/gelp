@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getDb } from "@/lib/db";
 import { parseTakeoutZip } from "@/lib/takeout";
-import { runImport } from "@/lib/import";
+import { runImport, type ImportMode } from "@/lib/import";
 import { createPlacesClient } from "@/lib/places";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +24,11 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+
+  // Which of the two import buttons was pressed. "queued" is the default: it
+  // guesses at nothing and bills nothing, and a caller that wants an answer
+  // right now has to say so.
+  const mode: ImportMode = form.get("mode") === "fast" ? "fast" : "queued";
 
   const buffer = Buffer.from(await file.arrayBuffer());
 
@@ -57,6 +62,7 @@ export async function POST(req: Request) {
           parsed,
           createPlacesClient(),
           "upload",
+          mode,
           (p) => send({ type: "progress", ...p }),
         );
         send({ type: "done", result });

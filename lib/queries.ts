@@ -1,9 +1,15 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { lists, placeCache, places } from "./db/schema";
+import {
+  lists,
+  placeCache,
+  placeCoords,
+  placeQueue,
+  places,
+} from "./db/schema";
 import { resolveShare } from "./share";
 
-// A place as presented to the UI, joined with its enrichment cache.
+// A place as presented to the UI.
 export interface PlaceView {
   id: string;
   title: string;
@@ -13,6 +19,18 @@ export interface PlaceView {
   category: string | null;
   lat: number | null;
   lng: number | null;
+  // Where the coordinates above came from, so the UI can say how much to trust
+  // them — and, for a place with none, why it has none.
+  //
+  //   coords      — read off the place's own map page; correct
+  //   url         — the export stated the position; correct
+  //   search      — a text search picked it; a guess, and worth flagging
+  //   not_a_place — a saved shopping item or link, never had a position
+  //   null        — queued, or never resolved
+  resolver: string | null;
+  // True once this place is waiting on the resolve queue, so the UI can say so
+  // rather than presenting it as simply missing.
+  queued: boolean;
 }
 
 // A list plus its resolved places and a place count.
@@ -36,6 +54,14 @@ export async function loadLists(userId: string): Promise<ListView[]> {
 
   const views: ListView[] = [];
   for (const list of userLists) {
+    // `place_coords` first, because it is the only source that is certainly
+    // right: those rows were read off each place's own map page. `place_cache`
+    // holds whatever a text search guessed, and is a fallback.
+    //
+    // Preferring it *here*, on the read, and not only during import, is what
+    // makes a correction visible immediately. A user flags a pin, a resolve run
+    // writes the real coordinates, and the map is right on the next page load —
+    // rather than at whatever hour the next import happens to run.
     const rows = await db
       .select({
         id: places.id,
@@ -44,18 +70,28 @@ export async function loadLists(userId: string): Promise<ListView[]> {
         mapsUrl: places.mapsUrl,
         address: placeCache.address,
         category: placeCache.category,
-        lat: placeCache.lat,
-        lng: placeCache.lng,
+        lat: sql<
+          number | null
+        >`coalesce(${placeCoords.lat}, ${placeCache.lat})`,
+        lng: sql<
+          number | null
+        >`coalesce(${placeCoords.lng}, ${placeCache.lng})`,
+        resolver: sql<
+          string | null
+        >`case when ${placeCoords.lat} is not null then 'coords' else ${placeCache.resolver} end`,
+        queued: sql<boolean>`${placeQueue.status} = 'pending'`,
       })
       .from(places)
       .leftJoin(placeCache, eq(places.cacheKey, placeCache.key))
+      .leftJoin(placeCoords, eq(places.cid, placeCoords.cid))
+      .leftJoin(placeQueue, eq(places.mapsUrl, placeQueue.mapsUrl))
       .where(eq(places.listId, list.id));
 
     views.push({
       id: list.id,
       name: list.name,
       count: rows.length,
-      places: rows,
+      places: rows.map((r) => ({ ...r, queued: r.queued ?? false })),
     });
   }
 
