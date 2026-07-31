@@ -176,6 +176,52 @@ export async function enqueuePlaces(
   return added;
 }
 
+// How much work is waiting to have real coordinates read for it.
+export interface QueueSummary {
+  pending: number;
+  // Split by who asked, because they read differently: places a user reported
+  // as wrong are a complaint, places an import could not answer for are simply
+  // not done yet.
+  flagged: number;
+  fromImport: number;
+  // When the longest-waiting entry was queued, so a queue nobody is draining
+  // says so rather than looking merely busy.
+  oldestAt: number | null;
+}
+
+// Count what is on the resolve queue.
+//
+// Not scoped to a user: the queue is global because the coordinates it produces
+// are, and a place waiting there is waiting for everyone.
+export async function queueSummary(db: Db): Promise<QueueSummary> {
+  const rows = await db
+    .select({
+      reason: placeQueue.reason,
+      count: sql<number>`count(*)::int`,
+      oldest: sql<number | null>`min(${placeQueue.createdAt})`,
+    })
+    .from(placeQueue)
+    .where(eq(placeQueue.status, "pending"))
+    .groupBy(placeQueue.reason);
+
+  const summary: QueueSummary = {
+    pending: 0,
+    flagged: 0,
+    fromImport: 0,
+    oldestAt: null,
+  };
+  for (const row of rows) {
+    summary.pending += row.count;
+    if (row.reason === "flagged") summary.flagged += row.count;
+    else summary.fromImport += row.count;
+    if (row.oldest !== null) {
+      const at = Number(row.oldest);
+      summary.oldestAt = summary.oldestAt === null ? at : Math.min(summary.oldestAt, at);
+    }
+  }
+  return summary;
+}
+
 // The authoritative coordinates for every place in this list that has any, in
 // one round trip per batch.
 //

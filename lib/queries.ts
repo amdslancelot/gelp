@@ -8,6 +8,7 @@ import {
   places,
 } from "./db/schema";
 import { resolveShare } from "./share";
+import { queueSummary, type QueueSummary } from "./import";
 import {
   UNLOCATED_LIST_ID,
   UNLOCATED_LIST_NAME,
@@ -18,6 +19,7 @@ import {
 // The view shapes live in `place-view`, which has no database imports, so a
 // client component can read them without pulling the Postgres driver into the
 // browser bundle. Re-exported here because this is where they are produced.
+export type { QueueSummary } from "./import";
 export type { PlaceView, ListView } from "./place-view";
 export {
   UNLOCATED_LIST_ID,
@@ -118,6 +120,11 @@ export async function loadLists(userId: string): Promise<ListView[]> {
   }
 
   return views;
+}
+
+// Count what is on the resolve queue, for the import page.
+export async function loadQueueSummary(): Promise<QueueSummary> {
+  return queueSummary(await getDb());
 }
 
 // A map as seen by someone holding a share link.

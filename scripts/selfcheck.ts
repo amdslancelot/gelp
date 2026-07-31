@@ -16,7 +16,12 @@ import {
   parseTakeoutZip,
   regionKeyFromMapsUrl,
 } from "../lib/takeout";
-import { runImport, UNAVAILABLE_TTL_MS } from "../lib/import";
+import {
+  enqueuePlaces,
+  queueSummary,
+  runImport,
+  UNAVAILABLE_TTL_MS,
+} from "../lib/import";
 import { selectCandidate } from "../lib/places";
 import type {
   PlaceLookup,
@@ -913,6 +918,26 @@ async function main() {
     assert(
       requeued.queued === 0,
       `a place already on the queue is not queued twice, got ${requeued.queued}`,
+    );
+
+    // Flagging a pin puts it on the same queue as a queued import, because it
+    // is the same work — only the reason differs.
+    await enqueuePlaces(
+      db,
+      [{ mapsUrl: tokyoUrl("92"), title: "Wrongly pinned" }],
+      "flagged",
+      queuedUser,
+    );
+    const summary = await queueSummary(db);
+    assert(
+      summary.pending === 3 &&
+        summary.fromImport === 2 &&
+        summary.flagged === 1,
+      `the queue summary splits by reason: got ${summary.pending} pending (${summary.fromImport} import, ${summary.flagged} flagged)`,
+    );
+    assert(
+      summary.oldestAt !== null && summary.oldestAt <= Date.now(),
+      "the summary reports when the longest-waiting entry was queued",
     );
 
     // 13. Share links: one per user, revocable, and scoped to their owner.
