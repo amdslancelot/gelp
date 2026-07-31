@@ -11,7 +11,9 @@
     "db:up": "bash scripts/db-forward.sh start",
     "db:down": "bash scripts/db-forward.sh stop",
     "db:migrate-data": "tsx scripts/migrate-sqlite-to-pg.ts",
-    "selfcheck": "tsx scripts/selfcheck.ts"
+    "selfcheck": "tsx scripts/selfcheck.ts",
+    "queue:dump": "tsx scripts/dump-queue.ts",
+    "queue:resolve": "tsx scripts/dump-queue.ts && python3 scripts/resolve-cids.py --input data/queue.jsonl && tsx scripts/load-resolved.ts data/place-coords.jsonl --apply"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",

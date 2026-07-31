@@ -940,7 +940,78 @@ async function main() {
       "the summary reports when the longest-waiting entry was queued",
     );
 
-    // 13. Share links: one per user, revocable, and scoped to their owner.
+    // 13. The round trip a resolve run makes: a queued place gains real
+    //     coordinates, its queue entry closes, and the map is right without
+    //     waiting for another import.
+    console.log("\nResolve round trip:");
+    const target = tokyoUrl("90");
+    await db.insert(schema.placeCoords).values({
+      id: randomUUID(),
+      cid: cidFromMapsUrl(target) ?? null,
+      ftid: ftidFromMapsUrl(target) ?? null,
+      mapsUrl: target,
+      lat: 35.6812,
+      lng: 139.7671,
+      title: "Unknown Bar",
+      source: "browser",
+      resolvedAt: Date.now(),
+    });
+    await db
+      .update(schema.placeQueue)
+      .set({ status: "done", handledAt: Date.now() })
+      .where(eq(schema.placeQueue.mapsUrl, target));
+
+    const afterResolve = await queueSummary(db);
+    assert(
+      afterResolve.pending === 2,
+      `closing one entry leaves the rest pending, got ${afterResolve.pending}`,
+    );
+
+    // The place had no pin and no cache row at all — a queued import writes
+    // neither — so this only works if reads reach place_coords through the CID
+    // stored on the place itself.
+    const placed = await db
+      .select({ cid: schema.places.cid, cacheKey: schema.places.cacheKey })
+      .from(schema.places)
+      .where(eq(schema.places.mapsUrl, target));
+    assert(
+      placed[0]?.cid === cidFromMapsUrl(target) && placed[0]?.cacheKey === null,
+      `a queued place carries its CID and no cache row, got cid=${placed[0]?.cid} cacheKey=${placed[0]?.cacheKey}`,
+    );
+
+    // A re-import must not re-queue a place that now has coordinates, and must
+    // not pay for it either.
+    const settled = await runImport(
+      db,
+      queuedUser,
+      {
+        lists: [
+          {
+            name: "Queued",
+            places: [{ title: "Unknown Bar", mapsUrl: target }],
+          },
+        ],
+      },
+      neverCalled,
+      "upload",
+      "queued",
+    );
+    assert(
+      settled.queued === 0 && settled.apiCalls === 0,
+      `a resolved place is neither re-queued nor looked up, got ${settled.queued} queued / ${settled.apiCalls} call(s)`,
+    );
+    const mirroredBack = (
+      await db
+        .select()
+        .from(schema.placeCache)
+        .where(eq(schema.placeCache.key, target))
+    )[0];
+    assert(
+      mirroredBack?.resolver === "coords" && mirroredBack?.lat === 35.6812,
+      `the import mirrors the resolved coordinates into the cache, got ${mirroredBack?.resolver}`,
+    );
+
+    // 14. Share links: one per user, revocable, and scoped to their owner.
     console.log("\nShare links:");
     const token = await ensureShare(db, userId);
     assert(token.length >= 32, `token is long enough, got ${token.length} chars`);

@@ -19,11 +19,12 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "../lib/db/schema";
-import { placeCache, placeCoords } from "../lib/db/schema";
+import { placeCache, placeCoords, placeQueue } from "../lib/db/schema";
 import { cidFromMapsUrl, ftidFromMapsUrl } from "../lib/takeout";
+import { RESOLVER_COORDS } from "../lib/import";
 
 // One line of the scraper's output.
 interface Line {
@@ -214,8 +215,53 @@ async function main() {
 
     console.log(`\nwrote ${written} rows to place_coords`);
     console.log("These are authoritative: no expiry, no API call, ever.");
-    console.log("place_cache is corrected on the next import; the map is");
-    console.log("correct immediately, because reads prefer place_coords.");
+
+    // Correct the cache to match. Reads already prefer `place_coords`, so the
+    // map is right without this — but leaving a known-wrong row sitting in the
+    // cache means anything reading only the cache stays wrong, and the next
+    // import would mirror the correct value anyway. Doing it here just makes
+    // the two agree from the moment the coordinates are known.
+    //
+    // An update, never an insert: a place that has no cache row does not need
+    // one, because nothing is looking there for it.
+    let corrected = 0;
+    for (const row of rows) {
+      const done = await db
+        .update(placeCache)
+        .set({
+          lat: row.lat,
+          lng: row.lng,
+          status: "ok",
+          resolver: RESOLVER_COORDS,
+          fetchedAt: Date.now(),
+        })
+        .where(eq(placeCache.key, row.mapsUrl))
+        .returning({ key: placeCache.key });
+      corrected += done.length;
+    }
+    console.log(`corrected ${corrected} cached rows to match`);
+
+    // Close the queue entries these coordinates answer. Done last and scoped to
+    // what was actually written, so a place whose lookup failed stays pending
+    // and is picked up by the next run rather than being quietly dropped.
+    let closed = 0;
+    for (let i = 0; i < rows.length; i += 500) {
+      const done = await db
+        .update(placeQueue)
+        .set({ status: "done", handledAt: Date.now() })
+        .where(
+          and(
+            eq(placeQueue.status, "pending"),
+            inArray(
+              placeQueue.mapsUrl,
+              rows.slice(i, i + 500).map((r) => r.mapsUrl),
+            ),
+          ),
+        )
+        .returning({ id: placeQueue.id });
+      closed += done.length;
+    }
+    if (closed > 0) console.log(`closed ${closed} queue entries`);
   } finally {
     await pool.end();
   }

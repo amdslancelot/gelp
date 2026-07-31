@@ -74,6 +74,26 @@ PINNED_RE = re.compile(r"/maps/(?:search|place|dir)/(-?\d+\.\d+),(-?\d+\.\d+)")
 FEATURE_RE = re.compile(r"!1s0x[0-9a-f]+:0x[0-9a-f]+", re.I)
 
 
+def read_queue(path: Path) -> list[tuple[str, str]]:
+    """Every (url, title) in a work list written by `dump-queue.ts`."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            url = (row.get("key") or "").strip()
+            if url and url not in seen:
+                seen.add(url)
+                out.append((url, (row.get("title") or "").strip()))
+    return out
+
+
 def read_urls(takeout: Path) -> list[tuple[str, str]]:
     """Every distinct (url, title) in the export, in a stable order."""
     seen: dict[str, str] = {}
@@ -117,6 +137,14 @@ def coords_from(url: str) -> tuple[float, float] | None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--takeout", default="~/Downloads/Takeout/Saved")
+    ap.add_argument(
+        "--input",
+        help=(
+            "a work list from dump-queue.ts, instead of a whole Takeout. "
+            "Resume is taken from the queue rather than the output file, so a "
+            "place flagged after it was already resolved is resolved again."
+        ),
+    )
     ap.add_argument("--out", default="data/place-coords.jsonl")
     ap.add_argument("--limit", type=int, default=0, help="stop after N lookups")
     ap.add_argument(
@@ -129,15 +157,27 @@ def main() -> int:
     ap.add_argument("--headful", action="store_true", help="show the browser")
     args = ap.parse_args()
 
-    takeout = Path(os.path.expanduser(args.takeout))
-    if not takeout.is_dir():
-        print(f"no such directory: {takeout}", file=sys.stderr)
-        return 1
-
     out = Path(os.path.expanduser(args.out))
     out.parent.mkdir(parents=True, exist_ok=True)
-    entries = read_urls(takeout)
-    done = load_done(out)
+
+    if args.input:
+        work_list = Path(os.path.expanduser(args.input))
+        if not work_list.is_file():
+            print(f"no such file: {work_list}", file=sys.stderr)
+            return 1
+        entries = read_queue(work_list)
+        # The queue is the authority on what still needs doing — a row stays
+        # pending until coordinates were actually written for it — so a place
+        # already in the output file is deliberately not skipped. That is what
+        # lets a place be re-resolved after someone reports its pin as wrong.
+        done = set()
+    else:
+        takeout = Path(os.path.expanduser(args.takeout))
+        if not takeout.is_dir():
+            print(f"no such directory: {takeout}", file=sys.stderr)
+            return 1
+        entries = read_urls(takeout)
+        done = load_done(out)
 
     # Anything whose URL already names its position is written straight out;
     # only what actually needs a browser gets one.
@@ -177,6 +217,9 @@ def main() -> int:
             todo.append((url, title))
 
     print(f"{len(entries)} distinct places, {len(done)} already done")
+    if not entries:
+        print("nothing to do")
+        return 0
     print(f"{free} resolved from the URL itself, {len(todo)} need a browser")
     if args.limit and args.limit < len(todo):
         print(f"--limit {args.limit}: doing {args.limit} of them this run")
