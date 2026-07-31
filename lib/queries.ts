@@ -8,38 +8,23 @@ import {
   places,
 } from "./db/schema";
 import { resolveShare } from "./share";
+import {
+  UNLOCATED_LIST_ID,
+  UNLOCATED_LIST_NAME,
+  type ListView,
+  type PlaceView,
+} from "./place-view";
 
-// A place as presented to the UI.
-export interface PlaceView {
-  id: string;
-  title: string;
-  note: string | null;
-  mapsUrl: string | null;
-  address: string | null;
-  category: string | null;
-  lat: number | null;
-  lng: number | null;
-  // Where the coordinates above came from, so the UI can say how much to trust
-  // them — and, for a place with none, why it has none.
-  //
-  //   coords      — read off the place's own map page; correct
-  //   url         — the export stated the position; correct
-  //   search      — a text search picked it; a guess, and worth flagging
-  //   not_a_place — a saved shopping item or link, never had a position
-  //   null        — queued, or never resolved
-  resolver: string | null;
-  // True once this place is waiting on the resolve queue, so the UI can say so
-  // rather than presenting it as simply missing.
-  queued: boolean;
-}
-
-// A list plus its resolved places and a place count.
-export interface ListView {
-  id: string;
-  name: string;
-  count: number;
-  places: PlaceView[];
-}
+// The view shapes live in `place-view`, which has no database imports, so a
+// client component can read them without pulling the Postgres driver into the
+// browser bundle. Re-exported here because this is where they are produced.
+export type { PlaceView, ListView } from "./place-view";
+export {
+  UNLOCATED_LIST_ID,
+  UNLOCATED_LIST_NAME,
+  unlocatedReason,
+  type UnlocatedReason,
+} from "./place-view";
 
 // Load every non-hidden list owned by a user, each with its enriched places.
 // This runs in a server component, so it must only be reached from dynamic
@@ -79,6 +64,7 @@ export async function loadLists(userId: string): Promise<ListView[]> {
         resolver: sql<
           string | null
         >`case when ${placeCoords.lat} is not null then 'coords' else ${placeCache.resolver} end`,
+        status: placeCache.status,
         queued: sql<boolean>`${placeQueue.status} = 'pending'`,
       })
       .from(places)
@@ -106,6 +92,31 @@ export async function loadLists(userId: string): Promise<ListView[]> {
     return i === -1 ? pinnedTop.length : i;
   };
   views.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+
+  // A place with no coordinates is on no map, and a place on no map is one the
+  // user never sees — so it can never be reported as wrong, and would sit
+  // unlocated forever. Gathering them into one list at the bottom is what makes
+  // them visible enough to act on.
+  const unlocated = new Map<string, PlaceView>();
+  for (const view of views) {
+    for (const place of view.places) {
+      if (place.lat !== null && place.lng !== null) continue;
+      // The same place in three lists is one problem, not three.
+      const key = place.mapsUrl ?? place.id;
+      if (!unlocated.has(key)) unlocated.set(key, place);
+    }
+  }
+  if (unlocated.size > 0) {
+    views.push({
+      id: UNLOCATED_LIST_ID,
+      name: UNLOCATED_LIST_NAME,
+      count: unlocated.size,
+      places: [...unlocated.values()].sort((a, b) =>
+        a.title.localeCompare(b.title),
+      ),
+    });
+  }
+
   return views;
 }
 

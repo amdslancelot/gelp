@@ -2,9 +2,45 @@
 
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import type { ListView, PlaceView } from "@/lib/queries";
+import {
+  UNLOCATED_LIST_ID,
+  unlocatedReason,
+  type ListView,
+  type PlaceView,
+  type UnlocatedReason,
+} from "@/lib/place-view";
 import type { MapBounds } from "./MapView";
 import { displayListName, humanizeCategory } from "@/lib/humanize";
+import FlagButton from "./FlagButton";
+
+// What each reason for having no position looks like, and whether the user can
+// do anything about it. Only "missing" is actionable: the rest are either
+// already in hand or were never places to begin with.
+const REASONS: Record<
+  UnlocatedReason,
+  { label: string; tone: string; flaggable: boolean }
+> = {
+  missing: {
+    label: "Couldn't find it",
+    tone: "bg-amber-100 text-amber-800",
+    flaggable: true,
+  },
+  queued: {
+    label: "Queued",
+    tone: "bg-sky-100 text-sky-800",
+    flaggable: false,
+  },
+  retrying: {
+    label: "Will retry",
+    tone: "bg-neutral-100 text-neutral-600",
+    flaggable: false,
+  },
+  not_place: {
+    label: "Not a place",
+    tone: "bg-neutral-100 text-neutral-500",
+    flaggable: false,
+  },
+};
 
 // Leaflet touches `window`, so the map is loaded only on the client.
 const MapView = dynamic(() => import("./MapView"), {
@@ -76,10 +112,14 @@ export default function Browser({ lists }: { lists: ListView[] }) {
   // Places shown in the middle column: the mapped set, optionally narrowed to
   // the map's current viewport. Until the map reports its first bounds we show
   // everything, so the list is never empty on load.
+  // The built-in "No coordinates" list is, by definition, nowhere on the map,
+  // so narrowing it to the viewport would always empty it.
+  const isUnlocated = selectedListId === UNLOCATED_LIST_ID;
+
   const listedPlaces = useMemo(() => {
-    if (!filterToView || !mapBounds) return visiblePlaces;
+    if (isUnlocated || !filterToView || !mapBounds) return visiblePlaces;
     return visiblePlaces.filter((p) => inBounds(p, mapBounds));
-  }, [visiblePlaces, filterToView, mapBounds]);
+  }, [visiblePlaces, filterToView, mapBounds, isUnlocated]);
 
   const selectList = (id: string) => {
     setSelectedListId(id);
@@ -181,36 +221,68 @@ export default function Browser({ lists }: { lists: ListView[] }) {
           mobileTab === "map" ? "hidden" : "flex"
         }`}
       >
+        {isUnlocated && (
+          <p className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs leading-relaxed text-amber-800">
+            These places have no position, so they are on no map. The ones
+            marked <span className="font-medium">Couldn&rsquo;t find it</span> can
+            be queued to have their real coordinates read from Google Maps.
+          </p>
+        )}
         <ul className="flex-1 overflow-y-auto divide-y divide-neutral-100">
-          {listedPlaces.map((p) => (
-            <li key={p.id}>
-              <button
-                onClick={() => selectPlace(p)}
-                className={`block w-full px-4 py-3 text-left hover:bg-neutral-50 ${
-                  focus?.id === p.id ? "bg-neutral-50" : ""
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="font-medium text-neutral-900">
-                    {p.title}
-                  </span>
-                  {p.category && (
-                    <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
-                      {humanizeCategory(p.category)}
+          {listedPlaces.map((p) => {
+            const reason = REASONS[unlocatedReason(p)];
+            const unplaced = p.lat === null || p.lng === null;
+            return (
+              <li key={p.id} className="relative">
+                <button
+                  onClick={() => selectPlace(p)}
+                  className={`block w-full px-4 py-3 text-left hover:bg-neutral-50 ${
+                    focus?.id === p.id ? "bg-neutral-50" : ""
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium text-neutral-900">
+                      {p.title}
                     </span>
+                    {unplaced ? (
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${reason.tone}`}
+                      >
+                        {reason.label}
+                      </span>
+                    ) : (
+                      p.category && (
+                        <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
+                          {humanizeCategory(p.category)}
+                        </span>
+                      )
+                    )}
+                  </div>
+                  {p.address && (
+                    <div className="mt-0.5 text-xs text-neutral-500">
+                      {p.address}
+                    </div>
                   )}
-                </div>
-                {p.address && (
-                  <div className="mt-0.5 text-xs text-neutral-500">
-                    {p.address}
+                  {p.note && (
+                    <div className="mt-1 text-sm text-neutral-600">{p.note}</div>
+                  )}
+                </button>
+                {/* Offered where it can actually help: on a pin that exists but
+                    may be wrong, and on a place nothing could locate. Never on
+                    a saved shirt, or on one already queued. */}
+                {((unplaced && reason.flaggable) ||
+                  (!unplaced && p.resolver === "search")) && (
+                  <div className="pointer-events-none absolute bottom-2 right-3">
+                    <FlagButton
+                      mapsUrl={p.mapsUrl}
+                      title={p.title}
+                      className="pointer-events-auto"
+                    />
                   </div>
                 )}
-                {p.note && (
-                  <div className="mt-1 text-sm text-neutral-600">{p.note}</div>
-                )}
-              </button>
-            </li>
-          ))}
+              </li>
+            );
+          })}
           {listedPlaces.length === 0 && (
             <li className="px-4 py-6 text-sm text-neutral-400">
               {filterToView && mapBounds && visiblePlaces.length > 0
@@ -279,23 +351,41 @@ function ListItems({
 }) {
   return (
     <ul className="pb-4">
-      {lists.map((list) => (
-        <li key={list.id}>
-          <button
-            onClick={() => onSelect(list.id)}
-            className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm ${
-              list.id === selectedListId
-                ? "bg-rose-50 font-medium text-rose-700"
-                : "text-neutral-700 hover:bg-neutral-50"
-            }`}
-          >
-            <span className="truncate">{displayListName(list.name)}</span>
-            <span className="ml-2 shrink-0 text-xs text-neutral-400">
-              {list.count}
-            </span>
-          </button>
-        </li>
-      ))}
+      {lists.map((list) => {
+        // The built-in list of places with no position. Marked out because it
+        // is not one of the user's own lists and is a to-do, not a place to
+        // browse — it should read as something to deal with.
+        const built = list.id === UNLOCATED_LIST_ID;
+        const selected = list.id === selectedListId;
+        return (
+          <li key={list.id} className={built ? "mt-2 border-t border-neutral-200 pt-2" : ""}>
+            <button
+              onClick={() => onSelect(list.id)}
+              className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm ${
+                selected
+                  ? built
+                    ? "bg-amber-50 font-medium text-amber-800"
+                    : "bg-rose-50 font-medium text-rose-700"
+                  : built
+                    ? "text-amber-700 hover:bg-amber-50"
+                    : "text-neutral-700 hover:bg-neutral-50"
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                {built && <span aria-hidden>⚠</span>}
+                <span className="truncate">{displayListName(list.name)}</span>
+              </span>
+              <span
+                className={`ml-2 shrink-0 text-xs ${
+                  built ? "text-amber-600" : "text-neutral-400"
+                }`}
+              >
+                {list.count}
+              </span>
+            </button>
+          </li>
+        );
+      })}
       {lists.length === 0 && (
         <li className="px-4 py-2 text-sm text-neutral-400">
           No lists yet. Import a Takeout export.

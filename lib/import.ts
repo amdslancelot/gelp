@@ -148,7 +148,7 @@ async function writeCache(
 // re-opened by flagging it, which is a deliberate act, not by importing again.
 export async function enqueuePlaces(
   db: Db,
-  entries: Array<{ mapsUrl: string; title: string }>,
+  entries: Array<{ mapsUrl: string; title: string; note?: string }>,
   reason: "flagged" | "import",
   requestedBy: string | null,
 ): Promise<number> {
@@ -160,6 +160,7 @@ export async function enqueuePlaces(
       mapsUrl: e.mapsUrl,
       cid: cidFromMapsUrl(e.mapsUrl) ?? null,
       title: e.title,
+      note: e.note ?? null,
       reason,
       requestedBy,
       status: "pending" as const,
