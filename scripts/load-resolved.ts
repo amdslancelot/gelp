@@ -24,6 +24,7 @@ import { Pool } from "pg";
 import * as schema from "../lib/db/schema";
 import { placeCache, placeCoords, placeQueue } from "../lib/db/schema";
 import { cidFromMapsUrl, ftidFromMapsUrl } from "../lib/takeout";
+import { haversineMeters } from "../lib/geo";
 import { RESOLVER_COORDS } from "../lib/import";
 
 // One line of the scraper's output.
@@ -145,11 +146,12 @@ async function main() {
         added += 1;
         continue;
       }
+      // The same haversine the import uses to reject an out-of-region
+      // candidate. A flat approximation is fine at the half-kilometre mark this
+      // is thresholded on, but these errors run to the other side of the world,
+      // where it reports distances longer than the planet.
       const km =
-        Math.hypot(
-          had.lat - row.lat,
-          (had.lng - row.lng) * Math.cos((row.lat * Math.PI) / 180),
-        ) * 111;
+        haversineMeters({ lat: had.lat, lng: had.lng }, row) / 1000;
       if (km < 0.5) same += 1;
       else {
         moved += 1;
