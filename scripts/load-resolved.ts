@@ -224,8 +224,32 @@ async function main() {
     //
     // An update, never an insert: a place that has no cache row does not need
     // one, because nothing is looking there for it.
+    //
+    // Matched on the CID rather than on the URL alone, because the same place
+    // turns up in an export under more than one URL — `!1s0x8085…:0xe090…` and
+    // a bare `!1s0x0:0xe090…` are the same bar. Rows are collapsed by CID
+    // before being written above, so correcting only the URL that survived
+    // would leave the other spelling of that place stale in the cache.
+    //
+    // The index is built from the cache's own keys, not from the file, so a URL
+    // that only an older export ever used is corrected too. Reading every key
+    // to do it is affordable: the cache has one row per place, not per saving.
+    const keysByCid = new Map<string, string[]>();
+    for (const { key } of await db
+      .select({ key: placeCache.key })
+      .from(placeCache)) {
+      const cid = cidFromMapsUrl(key);
+      if (!cid) continue;
+      const seen = keysByCid.get(cid);
+      if (seen) seen.push(key);
+      else keysByCid.set(cid, [key]);
+    }
+
     let corrected = 0;
     for (const row of rows) {
+      // Falling back to the URL covers a place saved as bare coordinates, which
+      // has no CID to match on.
+      const keys = (row.cid && keysByCid.get(row.cid)) || [row.mapsUrl];
       const done = await db
         .update(placeCache)
         .set({
@@ -235,7 +259,7 @@ async function main() {
           resolver: RESOLVER_COORDS,
           fetchedAt: Date.now(),
         })
-        .where(eq(placeCache.key, row.mapsUrl))
+        .where(inArray(placeCache.key, keys))
         .returning({ key: placeCache.key });
       corrected += done.length;
     }
