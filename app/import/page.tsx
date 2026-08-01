@@ -1,14 +1,29 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
+import { loadQueueSummary } from "@/lib/queries";
 import Header from "../components/Header";
 import Uploader from "../components/Uploader";
 
 export const dynamic = "force-dynamic";
 
+// Roughly how long something has been waiting, in the largest unit that still
+// reads as a number.
+function ago(ms: number): string {
+  const mins = Math.floor((Date.now() - ms) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 // Upload page for manually importing a Takeout export.
 export default async function ImportPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+
+  const queue = await loadQueueSummary();
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -54,6 +69,38 @@ export default async function ImportPage() {
           </p>
         </div>
         <Uploader />
+
+        {/* What is waiting to be resolved. Shown here because this is where a
+            queued import sends its work, and because a queue nobody drains
+            should be visible rather than silent — the resolve run is a
+            deliberate, manual step, not something that happens on its own. */}
+        {queue.pending > 0 && (
+          <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-medium text-amber-900">
+              {queue.pending} place{queue.pending === 1 ? "" : "s"} waiting to be
+              looked up
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-amber-800/80">
+              {queue.fromImport > 0 && (
+                <>
+                  {queue.fromImport} from imports
+                  {queue.flagged > 0 ? ", " : ". "}
+                </>
+              )}
+              {queue.flagged > 0 && (
+                <>
+                  {queue.flagged} reported as wrongly pinned.{" "}
+                </>
+              )}
+              They have no pin until a resolve run reads their real coordinates,
+              which is a manual step.
+              {queue.oldestAt !== null && (
+                <> Oldest queued {ago(queue.oldestAt)}.</>
+              )}
+            </p>
+          </div>
+        )}
+
         <p className="mt-6 rounded-lg bg-neutral-100 px-4 py-3 text-sm text-neutral-600">
           A nightly Drive sync also imports the newest Takeout zip
           automatically, so manual uploads are only needed when you want an

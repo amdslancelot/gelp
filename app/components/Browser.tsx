@@ -2,9 +2,46 @@
 
 import { useCallback, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import type { ListView, PlaceView } from "@/lib/queries";
+import {
+  UNLOCATED_LIST_ID,
+  unlocatedReason,
+  type ListView,
+  type PlaceView,
+  type UnlocatedReason,
+} from "@/lib/place-view";
 import type { MapBounds } from "./MapView";
 import { displayListName, humanizeCategory } from "@/lib/humanize";
+import { tier1Of } from "@/lib/category-tree";
+import FlagButton from "./FlagButton";
+
+// What each reason for having no position looks like, and whether the user can
+// do anything about it. Only "missing" is actionable: the rest are either
+// already in hand or were never places to begin with.
+const REASONS: Record<
+  UnlocatedReason,
+  { label: string; tone: string; flaggable: boolean }
+> = {
+  missing: {
+    label: "Couldn't find it",
+    tone: "bg-amber-100 text-amber-800",
+    flaggable: true,
+  },
+  queued: {
+    label: "Queued",
+    tone: "bg-sky-100 text-sky-800",
+    flaggable: false,
+  },
+  retrying: {
+    label: "Will retry",
+    tone: "bg-neutral-100 text-neutral-600",
+    flaggable: false,
+  },
+  not_place: {
+    label: "Not a place",
+    tone: "bg-neutral-100 text-neutral-500",
+    flaggable: false,
+  },
+};
 
 // Leaflet touches `window`, so the map is loaded only on the client.
 const MapView = dynamic(() => import("./MapView"), {
@@ -36,7 +73,11 @@ export default function Browser({ lists }: { lists: ListView[] }) {
   const [selectedListId, setSelectedListId] = useState<string | null>(
     lists[0]?.id ?? null,
   );
-  const [category, setCategory] = useState<string>(ALL);
+  // The filter is two-tier: an umbrella, then optionally one category under it.
+  // `leaf` is null while the whole umbrella is selected, and is always inside
+  // `umbrella` — picking a new umbrella clears it.
+  const [umbrella, setUmbrella] = useState<string>(ALL);
+  const [leaf, setLeaf] = useState<string | null>(null);
   const [focus, setFocus] = useState<PlaceView | null>(null);
   // When on, the middle-column list is narrowed to places inside the map's
   // current viewport. `mapBounds` is the latest viewport reported by the map.
@@ -57,33 +98,65 @@ export default function Browser({ lists }: { lists: ListView[] }) {
     [lists, selectedListId],
   );
 
-  // Distinct categories present in the selected list, for the chip row.
-  const categories = useMemo(() => {
-    const set = new Set<string>();
+  // The umbrellas present in the selected list, biggest first. A list of 200
+  // places can carry 60 categories, which is not a row anyone reads; the
+  // umbrella is what makes the first choice small enough to scan.
+  const umbrellas = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const p of selectedList?.places ?? []) {
-      if (p.category) set.add(p.category);
+      if (!p.category) continue;
+      const t = tier1Of(p.category);
+      counts.set(t, (counts.get(t) ?? 0) + 1);
     }
-    return Array.from(set).sort();
+    return Array.from(counts).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
   }, [selectedList]);
+
+  // The categories under the chosen umbrella that this list actually has. One
+  // of them means the umbrella is already as narrow as the data goes, so the
+  // second row would just repeat the first and is not drawn.
+  const leaves = useMemo(() => {
+    if (umbrella === ALL) return [];
+    const counts = new Map<string, number>();
+    for (const p of selectedList?.places ?? []) {
+      if (p.category && tier1Of(p.category) === umbrella) {
+        counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
+  }, [selectedList, umbrella]);
 
   // Places mapped (all markers for the selected list), after category filtering.
   const visiblePlaces = useMemo(() => {
     const all = selectedList?.places ?? [];
-    if (category === ALL) return all;
-    return all.filter((p) => p.category === category);
-  }, [selectedList, category]);
+    if (umbrella === ALL) return all;
+    if (leaf) return all.filter((p) => p.category === leaf);
+    return all.filter((p) => p.category && tier1Of(p.category) === umbrella);
+  }, [selectedList, umbrella, leaf]);
 
   // Places shown in the middle column: the mapped set, optionally narrowed to
   // the map's current viewport. Until the map reports its first bounds we show
   // everything, so the list is never empty on load.
+  // The built-in "No coordinates" list is, by definition, nowhere on the map,
+  // so narrowing it to the viewport would always empty it.
+  const isUnlocated = selectedListId === UNLOCATED_LIST_ID;
+
   const listedPlaces = useMemo(() => {
-    if (!filterToView || !mapBounds) return visiblePlaces;
+    if (isUnlocated || !filterToView || !mapBounds) return visiblePlaces;
     return visiblePlaces.filter((p) => inBounds(p, mapBounds));
-  }, [visiblePlaces, filterToView, mapBounds]);
+  }, [visiblePlaces, filterToView, mapBounds, isUnlocated]);
+
+  const selectUmbrella = (t: string) => {
+    setUmbrella(t);
+    setLeaf(null);
+  };
 
   const selectList = (id: string) => {
     setSelectedListId(id);
-    setCategory(ALL);
+    selectUmbrella(ALL);
     setFocus(null);
     setDrawerOpen(false);
     // Drop the stale viewport so the new list shows all its places immediately;
@@ -145,33 +218,56 @@ export default function Browser({ lists }: { lists: ListView[] }) {
         />
       </aside>
 
-      {/* Filter bar: spans the places-list and map columns above both. */}
-      <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-b border-neutral-200 bg-white px-4 py-2.5 md:col-span-2">
-        <Chip
-          label="All"
-          active={category === ALL}
-          onClick={() => setCategory(ALL)}
-        />
-        {categories.map((c) => (
+      {/* Filter bar: spans the places-list and map columns above both. Two rows,
+          the second only once an umbrella with more than one category under it
+          is chosen. */}
+      <div className="border-b border-neutral-200 bg-white md:col-span-2">
+        <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap px-4 py-2.5">
           <Chip
-            key={c}
-            label={humanizeCategory(c)}
-            active={category === c}
-            onClick={() => setCategory(c)}
+            label="All"
+            active={umbrella === ALL}
+            onClick={() => selectUmbrella(ALL)}
           />
-        ))}
-        {/* Toggle: narrow the list to what's inside the current map viewport. */}
-        <button
-          onClick={() => setFilterToView((v) => !v)}
-          aria-pressed={filterToView}
-          className={`ml-auto shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
-            filterToView
-              ? "border-rose-500 bg-rose-500 text-white"
-              : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
-          }`}
-        >
-          In map view
-        </button>
+          {umbrellas.map(([t, n]) => (
+            <Chip
+              key={t}
+              label={humanizeCategory(t)}
+              count={n}
+              active={umbrella === t}
+              onClick={() => selectUmbrella(t)}
+            />
+          ))}
+          {/* Toggle: narrow the list to what's inside the current map viewport. */}
+          <button
+            onClick={() => setFilterToView((v) => !v)}
+            aria-pressed={filterToView}
+            className={`ml-auto shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
+              filterToView
+                ? "border-rose-500 bg-rose-500 text-white"
+                : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
+            }`}
+          >
+            In map view
+          </button>
+        </div>
+        {leaves.length > 1 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-t border-neutral-100 bg-neutral-50 px-4 py-2">
+            <Chip
+              label={`All ${humanizeCategory(umbrella)}`}
+              active={leaf === null}
+              onClick={() => setLeaf(null)}
+            />
+            {leaves.map(([c, n]) => (
+              <Chip
+                key={c}
+                label={humanizeCategory(c)}
+                count={n}
+                active={leaf === c}
+                onClick={() => setLeaf(c)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Middle column: places in the selected list. On mobile it shares the
@@ -181,36 +277,78 @@ export default function Browser({ lists }: { lists: ListView[] }) {
           mobileTab === "map" ? "hidden" : "flex"
         }`}
       >
+        {isUnlocated && (
+          <p className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs leading-relaxed text-amber-800">
+            These places have no position, so they are on no map. The ones
+            marked <span className="font-medium">Couldn&rsquo;t find it</span> can
+            be queued to have their real coordinates read from Google Maps.
+          </p>
+        )}
         <ul className="flex-1 overflow-y-auto divide-y divide-neutral-100">
-          {listedPlaces.map((p) => (
-            <li key={p.id}>
-              <button
-                onClick={() => selectPlace(p)}
-                className={`block w-full px-4 py-3 text-left hover:bg-neutral-50 ${
-                  focus?.id === p.id ? "bg-neutral-50" : ""
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="font-medium text-neutral-900">
-                    {p.title}
-                  </span>
-                  {p.category && (
-                    <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
-                      {humanizeCategory(p.category)}
+          {listedPlaces.map((p) => {
+            const reason = REASONS[unlocatedReason(p)];
+            const unplaced = p.lat === null || p.lng === null;
+            return (
+              <li key={p.id} className="relative">
+                <button
+                  onClick={() => selectPlace(p)}
+                  className={`block w-full px-4 py-3 text-left hover:bg-neutral-50 ${
+                    focus?.id === p.id ? "bg-neutral-50" : ""
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium text-neutral-900">
+                      {p.title}
                     </span>
+                    {unplaced ? (
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${reason.tone}`}
+                      >
+                        {reason.label}
+                      </span>
+                    ) : (
+                      p.category && (
+                        <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
+                          {humanizeCategory(p.category)}
+                        </span>
+                      )
+                    )}
+                  </div>
+                  {p.address && (
+                    <div className="mt-0.5 text-xs text-neutral-500">
+                      {p.address}
+                    </div>
                   )}
-                </div>
-                {p.address && (
-                  <div className="mt-0.5 text-xs text-neutral-500">
-                    {p.address}
+                  {/* A closed place keeps its pin, because it is still where it
+                      was and the list is a record of what was saved. Saying so
+                      is the whole fix: nothing else about the row differs. */}
+                  {p.closed && (
+                    <div className="mt-0.5 text-xs font-medium text-rose-600">
+                      {p.closed === "permanently"
+                        ? "Permanently closed"
+                        : "Temporarily closed"}
+                    </div>
+                  )}
+                  {p.note && (
+                    <div className="mt-1 text-sm text-neutral-600">{p.note}</div>
+                  )}
+                </button>
+                {/* Offered where it can actually help: on a pin that exists but
+                    may be wrong, and on a place nothing could locate. Never on
+                    a saved shirt, or on one already queued. */}
+                {((unplaced && reason.flaggable) ||
+                  (!unplaced && p.resolver === "search")) && (
+                  <div className="pointer-events-none absolute bottom-2 right-3">
+                    <FlagButton
+                      mapsUrl={p.mapsUrl}
+                      title={p.title}
+                      className="pointer-events-auto"
+                    />
                   </div>
                 )}
-                {p.note && (
-                  <div className="mt-1 text-sm text-neutral-600">{p.note}</div>
-                )}
-              </button>
-            </li>
-          ))}
+              </li>
+            );
+          })}
           {listedPlaces.length === 0 && (
             <li className="px-4 py-6 text-sm text-neutral-400">
               {filterToView && mapBounds && visiblePlaces.length > 0
@@ -279,23 +417,41 @@ function ListItems({
 }) {
   return (
     <ul className="pb-4">
-      {lists.map((list) => (
-        <li key={list.id}>
-          <button
-            onClick={() => onSelect(list.id)}
-            className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm ${
-              list.id === selectedListId
-                ? "bg-rose-50 font-medium text-rose-700"
-                : "text-neutral-700 hover:bg-neutral-50"
-            }`}
-          >
-            <span className="truncate">{displayListName(list.name)}</span>
-            <span className="ml-2 shrink-0 text-xs text-neutral-400">
-              {list.count}
-            </span>
-          </button>
-        </li>
-      ))}
+      {lists.map((list) => {
+        // The built-in list of places with no position. Marked out because it
+        // is not one of the user's own lists and is a to-do, not a place to
+        // browse — it should read as something to deal with.
+        const built = list.id === UNLOCATED_LIST_ID;
+        const selected = list.id === selectedListId;
+        return (
+          <li key={list.id} className={built ? "mt-2 border-t border-neutral-200 pt-2" : ""}>
+            <button
+              onClick={() => onSelect(list.id)}
+              className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm ${
+                selected
+                  ? built
+                    ? "bg-amber-50 font-medium text-amber-800"
+                    : "bg-rose-50 font-medium text-rose-700"
+                  : built
+                    ? "text-amber-700 hover:bg-amber-50"
+                    : "text-neutral-700 hover:bg-neutral-50"
+              }`}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                {built && <span aria-hidden>⚠</span>}
+                <span className="truncate">{displayListName(list.name)}</span>
+              </span>
+              <span
+                className={`ml-2 shrink-0 text-xs ${
+                  built ? "text-amber-600" : "text-neutral-400"
+                }`}
+              >
+                {list.count}
+              </span>
+            </button>
+          </li>
+        );
+      })}
       {lists.length === 0 && (
         <li className="px-4 py-2 text-sm text-neutral-400">
           No lists yet. Import a Takeout export.
@@ -307,10 +463,12 @@ function ListItems({
 
 function Chip({
   label,
+  count,
   active,
   onClick,
 }: {
   label: string;
+  count?: number;
   active: boolean;
   onClick: () => void;
 }) {
@@ -324,6 +482,11 @@ function Chip({
       }`}
     >
       {label}
+      {count !== undefined && (
+        <span className={active ? "ml-1.5 text-rose-100" : "ml-1.5 text-neutral-400"}>
+          {count}
+        </span>
+      )}
     </button>
   );
 }

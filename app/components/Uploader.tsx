@@ -9,7 +9,12 @@ interface ImportResult {
   cacheHits: number;
   apiCalls: number;
   listsRemoved: number;
+  queued: number;
+  gone: number;
 }
+
+// Which of the two buttons was pressed. See `ImportMode` in lib/import.
+type Mode = "queued" | "fast";
 
 interface Progress {
   processed: number;
@@ -33,6 +38,12 @@ export default function Uploader() {
   const [done, setDone] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
+  // Which mode the next file picked will be imported with. Held in a ref as
+  // well as state because the file-input change handler fires after the click
+  // that set it, and reads the value out of a closure.
+  const modeRef = useRef<Mode>("queued");
+  const [mode, setMode] = useState<Mode>("queued");
+
   const upload = useCallback(
     async (file: File) => {
       if (busyRef.current) return;
@@ -45,6 +56,7 @@ export default function Uploader() {
       try {
         const body = new FormData();
         body.append("file", file);
+        body.append("mode", modeRef.current);
         const res = await fetch("/api/import/upload", {
           method: "POST",
           body,
@@ -112,6 +124,14 @@ export default function Uploader() {
     [router],
   );
 
+  // Open the file picker, remembering which button opened it.
+  const pick = (next: Mode) => {
+    if (busy) return;
+    modeRef.current = next;
+    setMode(next);
+    inputRef.current?.click();
+  };
+
   const pct =
     progress && progress.total > 0
       ? Math.round((progress.processed / progress.total) * 100)
@@ -134,9 +154,7 @@ export default function Uploader() {
           const file = e.dataTransfer.files?.[0];
           if (file) upload(file);
         }}
-        onClick={() => {
-          if (!busy) inputRef.current?.click();
-        }}
+        onClick={() => pick("queued")}
         className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
           busy
             ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
@@ -150,8 +168,10 @@ export default function Uploader() {
           {done
             ? "Taking you to your lists…"
             : busy
-              ? "Keep this tab open until it finishes"
-              : "or click to choose a file"}
+              ? `Keep this tab open until it finishes${
+                  mode === "fast" ? "" : " — no lookups, so this is quick"
+                }`
+              : "or choose how to import it below"}
         </p>
         <input
           ref={inputRef}
@@ -162,9 +182,34 @@ export default function Uploader() {
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) upload(file);
+            // Reset, so picking the same file again with the other button
+            // still fires a change event.
+            e.target.value = "";
           }}
         />
       </div>
+
+      {/* The two ways to import, and the trade they represent. Queued is first
+          and is what a drop on the box above uses: it never guesses, so it can
+          never pin a place in the wrong country — it just leaves those places
+          unpinned until a resolve run reads their real positions. Fast answers
+          immediately by searching for each title, which is a guess, and is
+          billed. */}
+      {!busy && !done && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <ModeButton
+            title="Queued import"
+            detail="Exact, free, slower. Places we don't already know are queued to be looked up properly — they appear once that runs."
+            emphasis
+            onClick={() => pick("queued")}
+          />
+          <ModeButton
+            title="Fast import"
+            detail="Everything on the map now, by searching each name. Some pins will be the wrong place, and it uses the Places API quota."
+            onClick={() => pick("fast")}
+          />
+        </div>
+      )}
 
       {pct !== null && (
         <div className="mt-4">
@@ -199,16 +244,74 @@ export default function Uploader() {
       )}
 
       {result && (
-        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-5">
-          <Stat label="Lists" value={result.lists} />
-          <Stat label="Places" value={result.places} />
-          <Stat label="Cache hits" value={result.cacheHits} />
-          <Stat label="API calls" value={result.apiCalls} />
-          {/* Lists the export no longer has, deleted to match it. */}
-          <Stat label="Removed" value={result.listsRemoved} />
-        </div>
+        <>
+          <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-5">
+            <Stat label="Lists" value={result.lists} />
+            <Stat label="Places" value={result.places} />
+            <Stat label="Known" value={result.cacheHits} />
+            <Stat label="Looked up" value={result.apiCalls} />
+            {/* Lists the export no longer has, deleted to match it. */}
+            <Stat label="Removed" value={result.listsRemoved} />
+          </div>
+          {result.queued > 0 && (
+            <p className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {result.queued} place{result.queued === 1 ? "" : "s"} queued to be
+              looked up properly. They&rsquo;ll have no pin until that runs — find
+              them under <span className="font-medium">No coordinates</span>.
+            </p>
+          )}
+          {result.gone > 0 && (
+            <p className="mt-3 rounded-lg bg-stone-100 px-4 py-3 text-sm text-stone-600">
+              {result.gone} place{result.gone === 1 ? "" : "s"} could not be
+              queued: Google no longer has the saved link, so there is no map
+              page to read. Find {result.gone === 1 ? "it" : "them"} under{" "}
+              <span className="font-medium">No coordinates</span> — a fast
+              import will still try to look {result.gone === 1 ? "it" : "them"}{" "}
+              up by name.
+            </p>
+          )}
+        </>
       )}
     </div>
+  );
+}
+
+// One of the two import buttons: a title, and the trade it makes.
+function ModeButton({
+  title,
+  detail,
+  emphasis,
+  onClick,
+}: {
+  title: string;
+  detail: string;
+  emphasis?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-xl border px-4 py-3 text-left transition ${
+        emphasis
+          ? "border-rose-300 bg-rose-50 hover:bg-rose-100"
+          : "border-neutral-300 bg-white hover:bg-neutral-50"
+      }`}
+    >
+      <div
+        className={`text-sm font-semibold ${
+          emphasis ? "text-rose-800" : "text-neutral-800"
+        }`}
+      >
+        {title}
+      </div>
+      <div
+        className={`mt-1 text-xs leading-relaxed ${
+          emphasis ? "text-rose-700/80" : "text-neutral-500"
+        }`}
+      >
+        {detail}
+      </div>
+    </button>
   );
 }
 

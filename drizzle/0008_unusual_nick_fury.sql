@@ -1,0 +1,1 @@
+ALTER TABLE "place_coords" ADD COLUMN "closed" text;

@@ -97,6 +97,113 @@ export function parseCsv(input: string): string[][] {
   return rows;
 }
 
+// A Takeout list CSV gives no coordinates — but its `URL` column sometimes
+// carries them anyway, in one of several shapes Google Maps uses. Mining them
+// is worth the regexes: the result is the place's real position rather than a
+// text search's best guess, and it costs no API call at all.
+//
+// Every shape puts latitude first.
+const COORD_PATTERNS: RegExp[] = [
+  // A dropped pin with no place attached: /maps/search/35.0266227,135.7391739
+  /\/maps\/(?:search|place|dir)\/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+  // The viewport anchor in a full place URL: /@35.0266227,135.7391739,17z
+  /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+  // A query parameter: ?q=35.02,135.73, &ll=…, &center=…
+  /[?&](?:q|ll|center|daddr)=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+  // The place's own position inside the protobuf-ish data blob.
+  /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+];
+
+// Extract a place's coordinates from its Maps URL, if the URL carries them.
+export function coordsFromMapsUrl(
+  url?: string,
+): { lat: number; lng: number } | undefined {
+  if (!url) return undefined;
+  for (const pattern of COORD_PATTERNS) {
+    const m = pattern.exec(url);
+    if (!m) continue;
+    const lat = Number(m[1]);
+    const lng = Number(m[2]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) continue;
+    // Null Island is what a malformed URL degrades into, never a saved place.
+    if (lat === 0 && lng === 0) continue;
+    return { lat, lng };
+  }
+  return undefined;
+}
+
+// The region a place belongs to, taken from the feature id in a
+// `data=!4m2!3m1!1s0x<cell>:0x<cid>` Maps URL.
+//
+// The first hex word is Google's quadtree cell for the place. We cannot decode
+// it into coordinates, and do not try — but it is hierarchical, so two places
+// whose cells share a leading prefix are in the same part of the world, and
+// that is enough to keep a lookup on the right continent. Unlike anything the
+// Places API returns, it comes from the export itself, so it is a fact about
+// the saved place rather than a guess about it.
+export function regionKeyFromMapsUrl(url?: string): string | undefined {
+  const ftid = ftidFromMapsUrl(url);
+  if (!ftid) return undefined;
+  // Left-pad so prefixes of two keys are compared at the same magnitude; a
+  // leading zero is dropped in the URL.
+  return ftid.split(":")[0].replace(/^0x/, "").padStart(16, "0");
+}
+
+// The whole feature id from a Maps URL, normalised to `0x<cell>:0x<cid>`.
+export function ftidFromMapsUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  const m = /!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i.exec(url);
+  return m ? m[1].toLowerCase() : undefined;
+}
+
+// Google's id for the place itself: the second half of the feature id.
+//
+// This is the stable half. The first half is a geographic cell, which can
+// change if a business relocates, and the surrounding URL contains the place's
+// name, which changes when it is renamed — so neither makes a durable key. The
+// CID identifies the place and nothing else, which is why `place_coords` is
+// keyed on it.
+export function cidFromMapsUrl(url?: string): string | undefined {
+  const ftid = ftidFromMapsUrl(url);
+  if (ftid) return normaliseCid(ftid.split(":")[1]);
+
+  // The other shape Google writes: `?cid=<decimal>`, which is what a Saved
+  // Places.json entry and an older shared link both use. Normalising both to
+  // the same hex means the same place matches whichever URL it arrived under.
+  const m = /[?&]cid=(\d+)/.exec(url ?? "");
+  if (!m) return undefined;
+  try {
+    return normaliseCid(BigInt(m[1]).toString(16));
+  } catch {
+    return undefined;
+  }
+}
+
+// One place, one key: pad to a fixed width so however many leading zeros a URL
+// happened to carry, the same place always produces the same string.
+function normaliseCid(hex: string): string {
+  return "0x" + hex.replace(/^0x/, "").toLowerCase().padStart(16, "0");
+}
+
+// Whether this entry is a place at all.
+//
+// A Takeout "Saved" list holds whatever the user starred, and not all of it is
+// on a map: `google.com/shopping/product/…` items, saved films pointing at a
+// bare `google.com`, ordinary web links. They have titles, so a text search
+// will cheerfully return *something* for "Nike Flex Men's 8\" Training Shorts"
+// — a shop, most likely, in whichever city ranked highest — and pin it. That is
+// a billed API call spent to invent a place that was never saved.
+//
+// An entry with no URL at all is still searchable: a title on its own is all
+// some exports give, and it is a real place.
+export function isPlaceEntry(place: ParsedPlace): boolean {
+  const url = place.mapsUrl?.trim();
+  if (!url) return true;
+  if (place.lat !== undefined && place.lng !== undefined) return true;
+  return cidFromMapsUrl(url) !== undefined || coordsFromMapsUrl(url) !== undefined;
+}
+
 // Parse the CSV text of one Takeout list into places. The header is
 // `Title,Note,URL` but exports vary, so columns are matched by name and extra
 // columns (such as `Comment`) are tolerated.
@@ -125,11 +232,17 @@ function parseListCsv(text: string): ParsedPlace[] {
     if (title === "") continue;
     const note = (cols[resolvedNote] ?? "").trim();
     const url = (cols[resolvedUrl] ?? "").trim();
-    places.push({
+    const place: ParsedPlace = {
       title,
       note: note === "" ? undefined : note,
       mapsUrl: url === "" ? undefined : url,
-    });
+    };
+    const coords = coordsFromMapsUrl(place.mapsUrl);
+    if (coords) {
+      place.lat = coords.lat;
+      place.lng = coords.lng;
+    }
+    places.push(place);
   }
 
   return places;
@@ -172,6 +285,14 @@ function parseSavedPlacesJson(text: string): ParsedPlace[] {
       if (Number.isFinite(lat) && Number.isFinite(lng)) {
         place.lat = lat;
         place.lng = lng;
+      }
+    }
+    if (place.lat === undefined) {
+      // A feature with no geometry can still name its position in the URL.
+      const fallback = coordsFromMapsUrl(place.mapsUrl);
+      if (fallback) {
+        place.lat = fallback.lat;
+        place.lng = fallback.lng;
       }
     }
 

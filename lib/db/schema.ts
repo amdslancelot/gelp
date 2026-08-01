@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   doublePrecision,
+  index,
   pgTable,
   text,
   unique,
@@ -71,6 +72,174 @@ export const places = pgTable("places", {
   mapsUrl: text("maps_url"),
   // Links to the enrichment cache. Nullable until a place has been resolved.
   cacheKey: text("cache_key").references(() => placeCache.key),
+  // Google's id for this place, taken from the feature id in its Maps URL.
+  // Stored rather than re-parsed so the join to `place_coords` is a plain
+  // equality instead of a regex over a URL on every read. Nullable: a saved
+  // shopping link has no place behind it and so has no id.
+  cid: text("cid"),
+});
+
+// Coordinates that are simply correct, because they were read off the place's
+// own Google Maps page rather than guessed at from its name.
+//
+// This table is the reason `place_cache` can be wrong without mattering. It is
+// authoritative and permanent: nothing in the import pipeline writes to it,
+// nothing expires out of it, and a search result may never override it. It is
+// filled only by `scripts/resolve-cids.py`, out of band, and afterwards a place
+// in here costs no API call and cannot drift.
+//
+// The primary key is a generated id, not the CID, so that nothing is shut out
+// of this table for lacking one. A place saved as bare coordinates has no CID
+// at all — there is no Google place behind it to have an id — and those belong
+// here as much as anything else.
+//
+// `cid` is the match key when there is one, and is the *right* match key: it
+// identifies the place itself, where the surrounding URL also contains its name
+// and changes when it is renamed, and the first half of the feature id is a
+// geographic cell that can change if a business relocates. `mapsUrl` is the
+// fallback match key, and the only one a coordinates-only place has.
+export const placeCoords = pgTable("place_coords", {
+  id: text("id").primaryKey(),
+  // Google's id for the place. Null when the export saved raw coordinates
+  // rather than a reference to a place. Unique where present — Postgres allows
+  // any number of nulls in a unique index, which is exactly what is wanted.
+  cid: text("cid").unique(),
+  // The whole feature id it came from, kept for tracing a row back to a URL.
+  ftid: text("ftid"),
+  // The URL this was resolved from. Always present, so it is what identifies a
+  // row that has no CID.
+  mapsUrl: text("maps_url").notNull().unique(),
+  lat: doublePrecision("lat").notNull(),
+  lng: doublePrecision("lng").notNull(),
+  // What the place was called when this was resolved. Not authoritative — the
+  // point of this table is the coordinates — but it makes a row readable.
+  title: text("title"),
+  // Read off the same page as the coordinates, and true of the same place.
+  //
+  // These live here rather than only in `place_cache` because they are the same
+  // kind of fact as the position: observed on the place's own map page, not
+  // guessed at from a title. Keeping them in the cache alone would mean a
+  // correction that survives nothing — clear the cache and the address reverts
+  // to whichever business a text search had matched.
+  //
+  // Both are optional. The position comes out of the URL, but these come out of
+  // the page, which changes far more often; a run that cannot find them leaves
+  // them null rather than writing something worse than nothing.
+  address: text("address"),
+  // The category as the map page words it ("Bar"), normalised to the same
+  // snake_case vocabulary the Places API uses ("bar") so one place does not
+  // appear under two spellings of one category.
+  category: text("category"),
+  // "permanently" or "temporarily", when the map page said so; null when it did
+  // not. A closed place is still a place and keeps its position — this only
+  // records that going there would be a wasted trip, which is not otherwise
+  // visible: nothing else about a closed listing looks any different.
+  //
+  // Read from the notice's wording, because Google marks it up with no
+  // attribute and no stable class. The browser's locale is pinned for exactly
+  // this reason.
+  closed: text("closed", { enum: ["permanently", "temporarily"] }),
+  // "browser" — read from the settled URL of the place's own Maps page.
+  // "url"     — the export's own URL already stated the position.
+  source: text("source", { enum: ["browser", "url"] }).notNull(),
+  resolvedAt: bigint("resolved_at", { mode: "number" })
+    .notNull()
+    .default(nowMillis),
+});
+
+// Places waiting to have their real coordinates read off their own map page.
+//
+// Two things put rows here and they are the same work, so they share a queue: a
+// user flagging a pin as wrong, and a queued import, which resolves nothing
+// itself and instead enqueues every place it could not already answer for. The
+// resolve run does not care which asked.
+//
+// This table *is* the queue. Nothing streams these to a worker: a row sits here
+// until a run picks it up, which means the queue survives a restart, can be
+// read before it is acted on, and can be re-run after a failure. A notification
+// channel could only make that faster, never more reliable, so there isn't one.
+//
+// Unique on `maps_url` alone — not per user. The coordinates it produces go to
+// `place_coords`, which is global because a place's position is a public fact,
+// so two users asking for the same place is one piece of work. That also makes
+// this a record of what still needs doing rather than an audit log: a place
+// resolved and later flagged again re-opens its row.
+export const placeQueue = pgTable(
+  "place_queue",
+  {
+    id: text("id").primaryKey(),
+    // What to resolve, identified the same way `place_coords` identifies a row
+    // — by URL always, by CID when there is one. Deliberately not a reference
+    // to `places.id`: those rows are deleted and recreated on every import, so
+    // a queue entry pointing at one would not survive the night.
+    mapsUrl: text("maps_url").notNull().unique(),
+    cid: text("cid"),
+    // Carried through so a queue waiting to be worked is readable without
+    // joining back to a `places` row that may since have been replaced.
+    title: text("title"),
+    // Why it is here. Only affects how it is presented — the work is identical.
+    //   flagged — a user said the pin is in the wrong place
+    //   import  — a queued import had no answer for it and did not guess
+    reason: text("reason", { enum: ["flagged", "import"] }).notNull(),
+    // Who asked first. Null for an import that ran unattended.
+    requestedBy: text("requested_by").references(() => users.id),
+    // Optionally what the user thinks is wrong.
+    note: text("note"),
+    // pending   — waiting for a resolve run
+    // done      — resolved; place_coords now has it
+    // failed    — a run tried and could not resolve it
+    // dismissed — closed by hand without resolving
+    status: text("status", {
+      enum: ["pending", "done", "failed", "dismissed"],
+    })
+      .notNull()
+      .default("pending"),
+    createdAt: bigint("created_at", { mode: "number" })
+      .notNull()
+      .default(nowMillis),
+    handledAt: bigint("handled_at", { mode: "number" }),
+  },
+  (t) => [index("place_queue_status_idx").on(t.status)],
+);
+
+// Feature ids Google will not resolve any more — a tombstone for each.
+//
+// A tombstone is a row whose whole purpose is to record an absence, so that
+// later work can tell "we know there is nothing here" apart from "we have not
+// looked yet". Without one the two are indistinguishable, and a queue full of
+// places that can never resolve is retried forever.
+//
+// What is dead is the *id*, not necessarily the place. Opening the URL used to
+// land on the place's own map page; it now settles on a blank map with the
+// feature id stripped out of the URL — Google's way of saying it has no entry
+// under that id. Some of these really are gone (a body shop, a house that was
+// built over). Others plainly exist: Angkor Thom is still there, its saved id
+// simply is not. So this records what cannot be resolved, and says nothing
+// about what is or is not in the world.
+//
+// Named for what it is asked, not for what it describes: the only question this
+// table answers is "is this CID dead?". It is not a `place_` table — it holds
+// no place, and nothing joins to it for one. A place saved as bare coordinates
+// can never be here, because it has no id to lose.
+//
+// So a lookup is by CID and only by CID. A search by title is a different
+// route entirely — it never had the id and does not lose anything when the id
+// dies — and is deliberately not gated on this.
+export const tombstoneCid = pgTable("tombstone_cid", {
+  id: text("id").primaryKey(),
+  cid: text("cid").notNull().unique(),
+  ftid: text("ftid"),
+  // The URL that no longer resolves, kept so a row can be re-checked by hand.
+  mapsUrl: text("maps_url").notNull(),
+  // What the export called it. Often the only human-readable trace left.
+  title: text("title"),
+  // Where the browser ended up instead. The evidence for the row, so a future
+  // reader can judge whether the conclusion still holds rather than trusting
+  // it — Google's URL shapes are undocumented and do change.
+  settledUrl: text("settled_url"),
+  noticedAt: bigint("noticed_at", { mode: "number" })
+    .notNull()
+    .default(nowMillis),
 });
 
 // Enrichment cache keyed so that each real-world place costs at most one
@@ -99,6 +268,14 @@ export const placeCache = pgTable("place_cache", {
   status: text("status", { enum: ["ok", "not_found", "unavailable"] })
     .notNull()
     .default("ok"),
+  // Where this row's coordinates came from. Provenance only — it does not
+  // decide expiry, because nothing resolved ever expires. It answers "why is
+  // this place here?" when a pin looks wrong.
+  //
+  //   coords  — mirrored from place_coords, which is authoritative
+  //   url     — the export's own URL named the position
+  //   search  — the Places API text search picked it, i.e. a guess
+  resolver: text("resolver").notNull().default("search"),
   fetchedAt: bigint("fetched_at", { mode: "number" })
     .notNull()
     .default(nowMillis),
@@ -126,4 +303,6 @@ export type User = typeof users.$inferSelect;
 export type List = typeof lists.$inferSelect;
 export type Place = typeof places.$inferSelect;
 export type PlaceCache = typeof placeCache.$inferSelect;
+export type PlaceCoords = typeof placeCoords.$inferSelect;
+export type PlaceQueueEntry = typeof placeQueue.$inferSelect;
 export type Share = typeof shares.$inferSelect;

@@ -1,27 +1,32 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { lists, placeCache, places } from "./db/schema";
+import {
+  lists,
+  placeCache,
+  placeCoords,
+  placeQueue,
+  places,
+} from "./db/schema";
 import { resolveShare } from "./share";
+import { queueSummary, type QueueSummary } from "./import";
+import {
+  UNLOCATED_LIST_ID,
+  UNLOCATED_LIST_NAME,
+  type ListView,
+  type PlaceView,
+} from "./place-view";
 
-// A place as presented to the UI, joined with its enrichment cache.
-export interface PlaceView {
-  id: string;
-  title: string;
-  note: string | null;
-  mapsUrl: string | null;
-  address: string | null;
-  category: string | null;
-  lat: number | null;
-  lng: number | null;
-}
-
-// A list plus its resolved places and a place count.
-export interface ListView {
-  id: string;
-  name: string;
-  count: number;
-  places: PlaceView[];
-}
+// The view shapes live in `place-view`, which has no database imports, so a
+// client component can read them without pulling the Postgres driver into the
+// browser bundle. Re-exported here because this is where they are produced.
+export type { QueueSummary } from "./import";
+export type { PlaceView, ListView } from "./place-view";
+export {
+  UNLOCATED_LIST_ID,
+  UNLOCATED_LIST_NAME,
+  unlocatedReason,
+  type UnlocatedReason,
+} from "./place-view";
 
 // Load every non-hidden list owned by a user, each with its enriched places.
 // This runs in a server component, so it must only be reached from dynamic
@@ -36,26 +41,56 @@ export async function loadLists(userId: string): Promise<ListView[]> {
 
   const views: ListView[] = [];
   for (const list of userLists) {
+    // `place_coords` first, because it is the only source that is certainly
+    // right: those rows were read off each place's own map page. `place_cache`
+    // holds whatever a text search guessed, and is a fallback.
+    //
+    // Preferring it *here*, on the read, and not only during import, is what
+    // makes a correction visible immediately. A user flags a pin, a resolve run
+    // writes the real coordinates, and the map is right on the next page load —
+    // rather than at whatever hour the next import happens to run.
     const rows = await db
       .select({
         id: places.id,
         title: places.title,
         note: places.note,
         mapsUrl: places.mapsUrl,
-        address: placeCache.address,
-        category: placeCache.category,
-        lat: placeCache.lat,
-        lng: placeCache.lng,
+        // Same precedence as the coordinates, for the same reason: an address
+        // read off the place's own page beats one a text search guessed at.
+        // Without this a corrected pin sits in Bali under a San Francisco
+        // address, which reads as a bug in the map rather than in the text.
+        address: sql<
+          string | null
+        >`coalesce(${placeCoords.address}, ${placeCache.address})`,
+        category: sql<
+          string | null
+        >`coalesce(${placeCoords.category}, ${placeCache.category})`,
+        lat: sql<
+          number | null
+        >`coalesce(${placeCoords.lat}, ${placeCache.lat})`,
+        lng: sql<
+          number | null
+        >`coalesce(${placeCoords.lng}, ${placeCache.lng})`,
+        resolver: sql<
+          string | null
+        >`case when ${placeCoords.lat} is not null then 'coords' else ${placeCache.resolver} end`,
+        // Nothing about a closed listing looks different otherwise, so this is
+        // the only way it reaches the page at all.
+        closed: placeCoords.closed,
+        status: placeCache.status,
+        queued: sql<boolean>`${placeQueue.status} = 'pending'`,
       })
       .from(places)
       .leftJoin(placeCache, eq(places.cacheKey, placeCache.key))
+      .leftJoin(placeCoords, eq(places.cid, placeCoords.cid))
+      .leftJoin(placeQueue, eq(places.mapsUrl, placeQueue.mapsUrl))
       .where(eq(places.listId, list.id));
 
     views.push({
       id: list.id,
       name: list.name,
       count: rows.length,
-      places: rows,
+      places: rows.map((r) => ({ ...r, queued: r.queued ?? false })),
     });
   }
 
@@ -70,7 +105,37 @@ export async function loadLists(userId: string): Promise<ListView[]> {
     return i === -1 ? pinnedTop.length : i;
   };
   views.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+
+  // A place with no coordinates is on no map, and a place on no map is one the
+  // user never sees — so it can never be reported as wrong, and would sit
+  // unlocated forever. Gathering them into one list at the bottom is what makes
+  // them visible enough to act on.
+  const unlocated = new Map<string, PlaceView>();
+  for (const view of views) {
+    for (const place of view.places) {
+      if (place.lat !== null && place.lng !== null) continue;
+      // The same place in three lists is one problem, not three.
+      const key = place.mapsUrl ?? place.id;
+      if (!unlocated.has(key)) unlocated.set(key, place);
+    }
+  }
+  if (unlocated.size > 0) {
+    views.push({
+      id: UNLOCATED_LIST_ID,
+      name: UNLOCATED_LIST_NAME,
+      count: unlocated.size,
+      places: [...unlocated.values()].sort((a, b) =>
+        a.title.localeCompare(b.title),
+      ),
+    });
+  }
+
   return views;
+}
+
+// Count what is on the resolve queue, for the import page.
+export async function loadQueueSummary(): Promise<QueueSummary> {
+  return queueSummary(await getDb());
 }
 
 // A map as seen by someone holding a share link.

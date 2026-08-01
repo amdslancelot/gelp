@@ -75,12 +75,16 @@ export async function POST(req: Request) {
   }
 
   const parsed = parseTakeoutZip(buffer);
+  // The unattended sync queues rather than guesses. Nobody is watching it to
+  // notice a place it put on the wrong continent, and a place with no pin yet
+  // is a smaller problem than a place with a confidently wrong one.
   const result = await runImport(
     db,
     userId,
     parsed,
     createPlacesClient(),
     "drive",
+    "queued",
   );
 
   return NextResponse.json(result);

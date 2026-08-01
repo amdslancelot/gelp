@@ -46,3 +46,6 @@ yarn-error.log*
 
 # Stray scratch output
 result.json
+
+# Python bytecode from scripts/
+__pycache__/
