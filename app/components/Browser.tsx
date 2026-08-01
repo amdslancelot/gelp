@@ -11,6 +11,7 @@ import {
 } from "@/lib/place-view";
 import type { MapBounds } from "./MapView";
 import { displayListName, humanizeCategory } from "@/lib/humanize";
+import { tier1Of } from "@/lib/category-tree";
 import FlagButton from "./FlagButton";
 
 // What each reason for having no position looks like, and whether the user can
@@ -72,7 +73,11 @@ export default function Browser({ lists }: { lists: ListView[] }) {
   const [selectedListId, setSelectedListId] = useState<string | null>(
     lists[0]?.id ?? null,
   );
-  const [category, setCategory] = useState<string>(ALL);
+  // The filter is two-tier: an umbrella, then optionally one category under it.
+  // `leaf` is null while the whole umbrella is selected, and is always inside
+  // `umbrella` — picking a new umbrella clears it.
+  const [umbrella, setUmbrella] = useState<string>(ALL);
+  const [leaf, setLeaf] = useState<string | null>(null);
   const [focus, setFocus] = useState<PlaceView | null>(null);
   // When on, the middle-column list is narrowed to places inside the map's
   // current viewport. `mapBounds` is the latest viewport reported by the map.
@@ -93,21 +98,44 @@ export default function Browser({ lists }: { lists: ListView[] }) {
     [lists, selectedListId],
   );
 
-  // Distinct categories present in the selected list, for the chip row.
-  const categories = useMemo(() => {
-    const set = new Set<string>();
+  // The umbrellas present in the selected list, biggest first. A list of 200
+  // places can carry 60 categories, which is not a row anyone reads; the
+  // umbrella is what makes the first choice small enough to scan.
+  const umbrellas = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const p of selectedList?.places ?? []) {
-      if (p.category) set.add(p.category);
+      if (!p.category) continue;
+      const t = tier1Of(p.category);
+      counts.set(t, (counts.get(t) ?? 0) + 1);
     }
-    return Array.from(set).sort();
+    return Array.from(counts).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
   }, [selectedList]);
+
+  // The categories under the chosen umbrella that this list actually has. One
+  // of them means the umbrella is already as narrow as the data goes, so the
+  // second row would just repeat the first and is not drawn.
+  const leaves = useMemo(() => {
+    if (umbrella === ALL) return [];
+    const counts = new Map<string, number>();
+    for (const p of selectedList?.places ?? []) {
+      if (p.category && tier1Of(p.category) === umbrella) {
+        counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
+  }, [selectedList, umbrella]);
 
   // Places mapped (all markers for the selected list), after category filtering.
   const visiblePlaces = useMemo(() => {
     const all = selectedList?.places ?? [];
-    if (category === ALL) return all;
-    return all.filter((p) => p.category === category);
-  }, [selectedList, category]);
+    if (umbrella === ALL) return all;
+    if (leaf) return all.filter((p) => p.category === leaf);
+    return all.filter((p) => p.category && tier1Of(p.category) === umbrella);
+  }, [selectedList, umbrella, leaf]);
 
   // Places shown in the middle column: the mapped set, optionally narrowed to
   // the map's current viewport. Until the map reports its first bounds we show
@@ -121,9 +149,14 @@ export default function Browser({ lists }: { lists: ListView[] }) {
     return visiblePlaces.filter((p) => inBounds(p, mapBounds));
   }, [visiblePlaces, filterToView, mapBounds, isUnlocated]);
 
+  const selectUmbrella = (t: string) => {
+    setUmbrella(t);
+    setLeaf(null);
+  };
+
   const selectList = (id: string) => {
     setSelectedListId(id);
-    setCategory(ALL);
+    selectUmbrella(ALL);
     setFocus(null);
     setDrawerOpen(false);
     // Drop the stale viewport so the new list shows all its places immediately;
@@ -185,33 +218,56 @@ export default function Browser({ lists }: { lists: ListView[] }) {
         />
       </aside>
 
-      {/* Filter bar: spans the places-list and map columns above both. */}
-      <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-b border-neutral-200 bg-white px-4 py-2.5 md:col-span-2">
-        <Chip
-          label="All"
-          active={category === ALL}
-          onClick={() => setCategory(ALL)}
-        />
-        {categories.map((c) => (
+      {/* Filter bar: spans the places-list and map columns above both. Two rows,
+          the second only once an umbrella with more than one category under it
+          is chosen. */}
+      <div className="border-b border-neutral-200 bg-white md:col-span-2">
+        <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap px-4 py-2.5">
           <Chip
-            key={c}
-            label={humanizeCategory(c)}
-            active={category === c}
-            onClick={() => setCategory(c)}
+            label="All"
+            active={umbrella === ALL}
+            onClick={() => selectUmbrella(ALL)}
           />
-        ))}
-        {/* Toggle: narrow the list to what's inside the current map viewport. */}
-        <button
-          onClick={() => setFilterToView((v) => !v)}
-          aria-pressed={filterToView}
-          className={`ml-auto shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
-            filterToView
-              ? "border-rose-500 bg-rose-500 text-white"
-              : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
-          }`}
-        >
-          In map view
-        </button>
+          {umbrellas.map(([t, n]) => (
+            <Chip
+              key={t}
+              label={humanizeCategory(t)}
+              count={n}
+              active={umbrella === t}
+              onClick={() => selectUmbrella(t)}
+            />
+          ))}
+          {/* Toggle: narrow the list to what's inside the current map viewport. */}
+          <button
+            onClick={() => setFilterToView((v) => !v)}
+            aria-pressed={filterToView}
+            className={`ml-auto shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
+              filterToView
+                ? "border-rose-500 bg-rose-500 text-white"
+                : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
+            }`}
+          >
+            In map view
+          </button>
+        </div>
+        {leaves.length > 1 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-t border-neutral-100 bg-neutral-50 px-4 py-2">
+            <Chip
+              label={`All ${humanizeCategory(umbrella)}`}
+              active={leaf === null}
+              onClick={() => setLeaf(null)}
+            />
+            {leaves.map(([c, n]) => (
+              <Chip
+                key={c}
+                label={humanizeCategory(c)}
+                count={n}
+                active={leaf === c}
+                onClick={() => setLeaf(c)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Middle column: places in the selected list. On mobile it shares the
@@ -407,10 +463,12 @@ function ListItems({
 
 function Chip({
   label,
+  count,
   active,
   onClick,
 }: {
   label: string;
+  count?: number;
   active: boolean;
   onClick: () => void;
 }) {
@@ -424,6 +482,11 @@ function Chip({
       }`}
     >
       {label}
+      {count !== undefined && (
+        <span className={active ? "ml-1.5 text-rose-100" : "ml-1.5 text-neutral-400"}>
+          {count}
+        </span>
+      )}
     </button>
   );
 }

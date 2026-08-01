@@ -37,6 +37,7 @@ import {
   revokeShare,
   rotateShare,
 } from "../lib/share";
+import { CATEGORY_TREE, TIER1, isPlaced, tier1Of } from "../lib/category-tree";
 
 // A tiny assertion helper that records failures rather than throwing, so the
 // script can print a complete summary before exiting.
@@ -1111,6 +1112,41 @@ async function main() {
       (await getShareToken(db, userId)) === null,
       "no link remains after revoking",
     );
+
+    console.log("\nCategory tree:");
+    // The tree is hand-written data, so the failure to guard against is a typo:
+    // a category listed under two umbrellas, or an umbrella that disagrees with
+    // itself. Both would quietly move places between filters.
+    const twoParents = new Map<string, string[]>();
+    for (const [parent, children] of Object.entries(CATEGORY_TREE)) {
+      for (const child of children) {
+        twoParents.set(child, [...(twoParents.get(child) ?? []), parent]);
+      }
+    }
+    const ambiguous = [...twoParents].filter(([, ps]) => ps.length > 1);
+    assert(
+      ambiguous.length === 0,
+      `no category sits under two umbrellas${ambiguous.length ? `, got ${ambiguous.map(([c, ps]) => `${c}→${ps.join("/")}`).join(", ")}` : ""}`,
+    );
+    const selfInconsistent = TIER1.filter((t) => tier1Of(t) !== t);
+    assert(
+      selfInconsistent.length === 0,
+      `every umbrella is its own tier 1${selfInconsistent.length ? `, got ${selfInconsistent.join(", ")}` : ""}`,
+    );
+    const misplaced = Object.entries(CATEGORY_TREE).flatMap(([parent, children]) =>
+      children.filter((child) => tier1Of(child) !== parent),
+    );
+    assert(
+      misplaced.length === 0,
+      `every category resolves to the umbrella it is listed under${misplaced.length ? `, got ${misplaced.join(", ")}` : ""}`,
+    );
+    // A category Google invents after this table was written must still land
+    // somewhere browsable rather than disappearing from the filter.
+    assert(
+      tier1Of("okonomiyaki_restaurant") === "restaurant" && !isPlaced("okonomiyaki_restaurant"),
+      "an unknown category falls back by suffix and is reported as unplaced",
+    );
+    assert(tier1Of("shed_thing") === "other", "an unrecognisable category lands in other");
   } finally {
     // 9. Tear down the throwaway database.
     await pool.end();
