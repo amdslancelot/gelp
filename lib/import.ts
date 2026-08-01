@@ -6,6 +6,7 @@ import {
   placeCache,
   placeCoords,
   placeQueue,
+  tombstoneCid,
   places,
   type PlaceCache,
   type PlaceCoords,
@@ -35,6 +36,9 @@ export interface ImportResult {
   listsRemoved: number;
   // Places put on the resolve queue rather than guessed at.
   queued: number;
+  // Places a queued import skipped because their Google id is dead. Resolving
+  // one means opening its map page by id, and there is no page to open.
+  gone: number;
 }
 
 // How an import resolves the places whose position it does not already know.
@@ -153,9 +157,26 @@ export async function enqueuePlaces(
   requestedBy: string | null,
 ): Promise<number> {
   if (entries.length === 0) return 0;
+
+  // Never queue an id Google has already refused. A resolve run on one of
+  // these cannot succeed — it opens a blank map and gives up — so queueing it
+  // would leave a row that is retried on every run and never closes. Filtered
+  // here rather than at each caller because both callers need it: an import
+  // that sweeps up everything unresolved, and a user flagging a pin that the
+  // built-in unlocated list showed them.
+  const gone = await loadTombstones(
+    db,
+    entries.map((e) => cidFromMapsUrl(e.mapsUrl)),
+  );
+  const live = entries.filter((e) => {
+    const cid = cidFromMapsUrl(e.mapsUrl);
+    return !cid || !gone.has(cid);
+  });
+  if (live.length === 0) return 0;
+
   let added = 0;
-  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-    const rows = entries.slice(i, i + BATCH_SIZE).map((e) => ({
+  for (let i = 0; i < live.length; i += BATCH_SIZE) {
+    const rows = live.slice(i, i + BATCH_SIZE).map((e) => ({
       id: randomUUID(),
       mapsUrl: e.mapsUrl,
       cid: cidFromMapsUrl(e.mapsUrl) ?? null,
@@ -244,6 +265,28 @@ async function loadCoords(
   return found;
 }
 
+// Which of these ids Google has already been asked about and had no entry for.
+//
+// The distinction this preserves is between "not looked up yet" and "looked up,
+// and there is nothing there". Only the first is worth spending a resolve run
+// or an API call on; without the table they are the same thing, and the second
+// is paid for over and over.
+export async function loadTombstones(
+  db: Db,
+  cids: Array<string | undefined>,
+): Promise<Set<string>> {
+  const unique = [...new Set(cids.filter((c): c is string => Boolean(c)))];
+  const gone = new Set<string>();
+  for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+    const rows = await db
+      .select({ cid: tombstoneCid.cid })
+      .from(tombstoneCid)
+      .where(inArray(tombstoneCid.cid, unique.slice(i, i + BATCH_SIZE)));
+    for (const row of rows) gone.add(row.cid);
+  }
+  return gone;
+}
+
 // Ask the Places client for one place, aimed at wherever its region is known
 // or believed to be.
 //
@@ -322,6 +365,7 @@ export async function runImport(
     apiCalls: 0,
     listsRemoved: 0,
     queued: 0,
+    gone: 0,
   };
 
   // Precomputed denominators so the UI can show a stable "x / total" bar.
@@ -350,6 +394,11 @@ export async function runImport(
     // position the URL states outright, then the cache, then a search.
     const cids = parsedList.places.map((p) => cidFromMapsUrl(p.mapsUrl));
     const coords = await loadCoords(db, cids);
+
+    // Ids a resolve run has already found Google has no entry for. Consulted
+    // only by the queued path below: this closes the id-based route, not the
+    // search-by-title one.
+    const gone = await loadTombstones(db, cids);
 
     // Resolve the exact position of a place, if one is known without asking
     // anybody. Both sources are facts rather than guesses, so either ends the
@@ -425,6 +474,16 @@ export async function runImport(
         // pin it, inventing a place the user never saved — and bill for it.
       } else if (cached && isCacheFresh(cached, Date.now())) {
         result.cacheHits += 1;
+      } else if (mode === "queued" && cids[index] && gone.has(cids[index]!)) {
+        // Only the id-based route is closed. A resolve run would open this
+        // place's map page by its feature id, and Google has no page under
+        // that id — so queueing it is queueing work that cannot be done.
+        //
+        // A text search is untouched by this. It asks by title and never held
+        // the id, so it loses nothing when the id dies: `fast` mode still
+        // searches, and often finds the place, because the place is usually
+        // still there. What died is Google's reference to it.
+        result.gone += 1;
       } else if (mode === "queued") {
         // Nobody is asked. The place goes on the queue to be read off its own
         // map page, which is slow but simply correct — and leaves no wrong pin

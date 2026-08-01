@@ -10,6 +10,7 @@ interface ImportResult {
   apiCalls: number;
   listsRemoved: number;
   queued: number;
+  gone: number;
 }
 
 // Which of the two buttons was pressed. See `ImportMode` in lib/import.
@@ -257,6 +258,16 @@ export default function Uploader() {
               {result.queued} place{result.queued === 1 ? "" : "s"} queued to be
               looked up properly. They&rsquo;ll have no pin until that runs — find
               them under <span className="font-medium">No coordinates</span>.
+            </p>
+          )}
+          {result.gone > 0 && (
+            <p className="mt-3 rounded-lg bg-stone-100 px-4 py-3 text-sm text-stone-600">
+              {result.gone} place{result.gone === 1 ? "" : "s"} could not be
+              queued: Google no longer has the saved link, so there is no map
+              page to read. Find {result.gone === 1 ? "it" : "them"} under{" "}
+              <span className="font-medium">No coordinates</span> — a fast
+              import will still try to look {result.gone === 1 ? "it" : "them"}{" "}
+              up by name.
             </p>
           )}
         </>

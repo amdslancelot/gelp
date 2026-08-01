@@ -940,6 +940,74 @@ async function main() {
       "the summary reports when the longest-waiting entry was queued",
     );
 
+    // A place whose Google id no longer resolves is not queued: a resolve run
+    // opens its map page by that id, and there is no page. A text search is a
+    // different route — it asks by title and never held the id — so it is
+    // deliberately still made. The id died, not usually the place.
+    console.log("\nTombstoned ids:");
+    // Its own user: an import replaces that user's lists wholesale, so sharing
+    // one with the test above would delete the queue rows it just asserted on.
+    const goneUser = randomUUID();
+    await db.insert(users).values({
+      id: goneUser,
+      email: "gone@check.test",
+      createdAt: Date.now(),
+    });
+    const goneUrl = tokyoUrl("93");
+    await db.insert(schema.tombstoneCid).values({
+      id: randomUUID(),
+      cid: cidFromMapsUrl(goneUrl)!,
+      ftid: ftidFromMapsUrl(goneUrl) ?? null,
+      mapsUrl: goneUrl,
+      title: "Closed Bar",
+      settledUrl: "https://www.google.com/maps/place//@37.28,-121.84,14z/",
+      noticedAt: Date.now(),
+    });
+    const goneList = {
+      lists: [
+        { name: "Gone", places: [{ title: "Closed Bar", mapsUrl: goneUrl }] },
+      ],
+    };
+    const goneQueued = await runImport(
+      db,
+      goneUser,
+      goneList,
+      neverCalled,
+      "upload",
+      "queued",
+    );
+    assert(
+      goneQueued.queued === 0 && goneQueued.gone === 1,
+      `a queued import does not queue a dead id: got queued=${goneQueued.queued}, gone=${goneQueued.gone}`,
+    );
+
+    const goneSearcher = new GazetteerPlacesClient({});
+    const goneFast = await runImport(
+      db,
+      goneUser,
+      goneList,
+      goneSearcher,
+      "upload",
+      "fast",
+    );
+    assert(
+      goneSearcher.calls === 1 && goneFast.gone === 0,
+      `a fast import still searches by title for a dead id: got ${goneSearcher.calls} calls, gone=${goneFast.gone}`,
+    );
+
+    // Flagging one is refused for the same reason: the user can ask, but the
+    // queue is for work that can be done.
+    const flaggedGone = await enqueuePlaces(
+      db,
+      [{ mapsUrl: goneUrl, title: "Closed Bar" }],
+      "flagged",
+      goneUser,
+    );
+    assert(
+      flaggedGone === 0,
+      `flagging a dead id does not open a queue entry, got ${flaggedGone}`,
+    );
+
     // 13. The round trip a resolve run makes: a queued place gains real
     //     coordinates, its queue entry closes, and the map is right without
     //     waiting for another import.
