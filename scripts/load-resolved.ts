@@ -22,7 +22,12 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "../lib/db/schema";
-import { placeCache, placeCoords, placeQueue } from "../lib/db/schema";
+import {
+  placeCache,
+  placeCoords,
+  placeQueue,
+  tombstoneCid,
+} from "../lib/db/schema";
 import { cidFromMapsUrl, ftidFromMapsUrl } from "../lib/takeout";
 import { haversineMeters } from "../lib/geo";
 import { RESOLVER_COORDS } from "../lib/import";
@@ -36,6 +41,16 @@ interface Line {
   source?: string;
   resolved_at?: number;
   error?: string;
+  settled?: string; // where the browser ended up, when it did not resolve
+}
+
+// One row ready for place_tombstone: an id Google would not resolve.
+interface Tomb {
+  cid: string;
+  ftid: string | null;
+  mapsUrl: string;
+  title: string;
+  settledUrl: string | null;
 }
 
 // One row ready for place_coords.
@@ -56,10 +71,12 @@ function parse(path: string): {
   rows: Row[];
   skipped: number;
   clustered: Array<[string, number]>;
+  tombs: Tomb[];
 } {
   // Keyed by whatever identifies the row, so a place resolved twice — the bulk
   // run and again after a flag — collapses to one row, the later one winning.
   const byIdentity = new Map<string, Row>();
+  const byDeadCid = new Map<string, Tomb>();
   let skipped = 0;
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
@@ -71,6 +88,23 @@ function parse(path: string): {
       row = JSON.parse(trimmed) as Line;
     } catch {
       continue; // A half-written final line from an interrupted run.
+    }
+
+    // An id the browser asked about and Google dropped. Recorded so that
+    // nothing queues it again: it is not an unanswered question, it is one
+    // that has been answered with "there is no such id".
+    if (typeof row.key === "string" && row.error === "no such place") {
+      const dead = cidFromMapsUrl(row.key);
+      if (dead) {
+        byDeadCid.set(dead, {
+          cid: dead,
+          ftid: ftidFromMapsUrl(row.key) ?? null,
+          mapsUrl: row.key,
+          title: row.title,
+          settledUrl: row.settled ?? null,
+        });
+      }
+      continue;
     }
 
     if (
@@ -123,7 +157,13 @@ function parse(path: string): {
     else clustered.push([at, group.length]);
   }
 
-  return { rows: kept, skipped, clustered };
+  // A place that later resolved is not dead after all — Google restoring an
+  // entry is rarer than a run failing, but the file is append-only and the
+  // resolved answer is the better evidence.
+  const alive = new Set(kept.map((r) => r.cid).filter(Boolean));
+  const tombs = [...byDeadCid.values()].filter((t) => !alive.has(t.cid));
+
+  return { rows: kept, skipped, clustered, tombs };
 }
 
 async function main() {
@@ -135,8 +175,11 @@ async function main() {
     process.exit(1);
   }
 
-  const { rows, skipped, clustered } = parse(resolve(path));
+  const { rows, skipped, clustered, tombs } = parse(resolve(path));
   console.log(`${rows.length} resolved coordinates in ${path}`);
+  if (tombs.length > 0) {
+    console.log(`${tombs.length} ids Google no longer has — will be tombstoned`);
+  }
   if (skipped > 0) {
     console.log(`${skipped} skipped: no place behind the URL`);
   }
@@ -146,7 +189,10 @@ async function main() {
         `this is a map that never found them, not a position`,
     );
   }
-  if (rows.length === 0) return;
+  // A run that resolved nothing still has something to record if it found ids
+  // that are gone — which is precisely the shape of a re-run over a queue full
+  // of dead ids.
+  if (rows.length === 0 && tombs.length === 0) return;
 
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -322,6 +368,53 @@ async function main() {
       closed += done.length;
     }
     if (closed > 0) console.log(`closed ${closed} queue entries`);
+
+    // Record the ids that are gone, and close their queue entries as failed
+    // rather than done. Leaving them pending is the one outcome to avoid: every
+    // later run would dump them, open them, and fail on them again, and the
+    // count of outstanding work would never reach zero.
+    //
+    // `doNothing` on the CID keeps the first sighting, which carries the
+    // settled URL from when the id actually stopped resolving.
+    if (tombs.length > 0) {
+      let buried = 0;
+      for (let i = 0; i < tombs.length; i += 500) {
+        const batch = tombs.slice(i, i + 500);
+        const done = await db
+          .insert(tombstoneCid)
+          .values(
+            batch.map((t) => ({
+              id: randomUUID(),
+              cid: t.cid,
+              ftid: t.ftid,
+              mapsUrl: t.mapsUrl,
+              title: t.title,
+              settledUrl: t.settledUrl,
+              noticedAt: Date.now(),
+            })),
+          )
+          .onConflictDoNothing({ target: tombstoneCid.cid })
+          .returning({ id: tombstoneCid.id });
+        buried += done.length;
+
+        await db
+          .update(placeQueue)
+          .set({ status: "failed", handledAt: Date.now() })
+          .where(
+            and(
+              eq(placeQueue.status, "pending"),
+              inArray(
+                placeQueue.mapsUrl,
+                batch.map((t) => t.mapsUrl),
+              ),
+            ),
+          );
+      }
+      console.log(
+        `tombstoned ${buried} ids Google no longer has ` +
+          `(${tombs.length - buried} already recorded)`,
+      );
+    }
   } finally {
     await pool.end();
   }

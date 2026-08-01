@@ -275,12 +275,31 @@ def main() -> int:
                         ok += 1
                         status = f"{found[0]:.6f},{found[1]:.6f}"
                     else:
-                        # A consent wall or a place Google no longer has. Both
-                        # look the same from here; the URL is worth keeping so
-                        # a later run can retry it.
-                        record["error"] = "no coordinates in settled URL"
+                        # Two different failures, and they want opposite
+                        # handling, so tell them apart by what Google did with
+                        # the feature id we asked about.
+                        #
+                        # Still in the settled URL: the page is Google's answer
+                        # for this place and something else went wrong — a
+                        # consent wall, a slow load, a network blip. Worth
+                        # retrying.
+                        #
+                        # Gone from it: Google was asked for that id, dropped
+                        # it, and settled on a blank map. It has no entry under
+                        # that id, and no amount of retrying will produce one.
+                        #
+                        # The settled URL is recorded either way, because this
+                        # distinction rests on an undocumented URL shape and a
+                        # later reader deserves the evidence, not the verdict.
+                        settled = page.url
+                        record["settled"] = settled
+                        if FEATURE_RE.search(url) and not FEATURE_RE.search(settled):
+                            record["error"] = "no such place"
+                            status = "GONE"
+                        else:
+                            record["error"] = "no coordinates in settled URL"
+                            status = "FAILED"
                         failed += 1
-                        status = "FAILED"
                 except Exception as err:  # noqa: BLE001 - one bad place must not stop the run
                     record["error"] = f"{type(err).__name__}: {err}"
                     failed += 1
