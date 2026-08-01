@@ -45,6 +45,7 @@ interface Line {
   name?: string; // the name Google settled on, from the URL
   address?: string; // read off the page, when the run asked for details
   category?: string; // likewise, in the page's own wording
+  closed?: string; // "permanently" | "temporarily", when the page said so
 }
 
 // One row ready for place_tombstone: an id Google would not resolve.
@@ -73,6 +74,7 @@ interface Row {
   // overwrite when present.
   address: string | null;
   category: string | null;
+  closed: "permanently" | "temporarily" | null;
 }
 
 // Google words a category for a reader ("Cocktail bar"); the Places API words
@@ -86,6 +88,11 @@ export function normaliseCategory(raw?: string): string | null {
   const folded = raw
     .trim()
     .toLowerCase()
+    // Apostrophes are dropped rather than folded to an underscore, so "Men's
+    // clothing store" reads as `mens_clothing_store` and not `men_s_…`. The
+    // filter list renders these back into words, and "Men S Clothing Store" is
+    // the sort of thing nobody ever gets round to fixing.
+    .replace(/['\u2019]/g, "")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
   return folded === "" ? null : folded;
@@ -156,6 +163,10 @@ function parse(path: string): {
       resolvedAt: row.resolved_at ?? Date.now(),
       address: row.address?.trim() || null,
       category: normaliseCategory(row.category),
+      closed:
+        row.closed === "permanently" || row.closed === "temporarily"
+          ? row.closed
+          : null,
     });
   }
 
@@ -310,6 +321,10 @@ async function main() {
     if (addresses > 0) {
       console.log(`\n${addresses} addresses read off the page`);
     }
+    const shut = rows.filter((r) => r.closed !== null).length;
+    if (shut > 0) {
+      console.log(`${shut} places have closed`);
+    }
 
     if (!apply) {
       console.log("\ndry run — nothing written. Pass --apply to write.");
@@ -336,6 +351,7 @@ async function main() {
           resolvedAt: r.resolvedAt,
           address: r.address,
           category: r.category,
+          closed: r.closed,
         }));
         const set = {
           lat: sql`excluded.lat`,
@@ -350,6 +366,7 @@ async function main() {
           // when the incoming one is null.
           address: sql`coalesce(excluded.address, ${placeCoords.address})`,
           category: sql`coalesce(excluded.category, ${placeCoords.category})`,
+          closed: sql`coalesce(excluded.closed, ${placeCoords.closed})`,
         };
         const done = await db
           .insert(placeCoords)

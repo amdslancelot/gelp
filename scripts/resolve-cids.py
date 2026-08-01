@@ -168,10 +168,20 @@ def name_from(url: str) -> str | None:
 # `data-item-id` is a semantic attribute Google puts on the address row, which
 # makes it the sturdiest handle available. The category button has no such
 # attribute and is matched on its `jsaction`, which is frankly fragile — if it
-# starts coming back empty, that is the reason.
-def details_from(page) -> tuple[str | None, str | None]:
+# starts coming back empty, that is the reason — or, more often, the place has
+# closed and Google has put the notice where the category would be.
+#
+# Google states this in prose and marks it up with nothing — no attribute, no
+# stable class, just the words in a span. Matching text is therefore the only
+# option, which is why the browser's locale is pinned: the phrase has to be one
+# we chose to look for, not whichever language the machine happened to be in.
+CLOSED_RE = re.compile(r"\b(Permanently|Temporarily) closed\b")
+
+
+def details_from(page) -> tuple[str | None, str | None, str | None]:
     address = None
     category = None
+    closed = None
     # The URL gains its coordinates before the panel finishes rendering, so the
     # caller arrives here early. Wait for the address row specifically rather
     # than sleeping a fixed amount: pages that are ready cost nothing, and one
@@ -194,7 +204,16 @@ def details_from(page) -> tuple[str | None, str | None]:
             category = (el.inner_text() or "").strip() or None
     except Exception:  # noqa: BLE001
         pass
-    return address, category
+    # A place that has closed has no category button at all — Google puts the
+    # notice where the category would be. So a missing category is not evidence
+    # of a broken selector; more often it means this.
+    try:
+        m = CLOSED_RE.search(page.evaluate("() => document.body.innerText") or "")
+        if m:
+            closed = m.group(1).lower()
+    except Exception:  # noqa: BLE001
+        pass
+    return address, category, closed
 
 
 def main() -> int:
@@ -314,7 +333,11 @@ def main() -> int:
     ok = failed = 0
     with sync_playwright() as pw, out.open("a", encoding="utf-8") as fh:
         browser = pw.chromium.launch(headless=not args.headful)
-        page = browser.new_page()
+        # Pinned so the page is always in the language this script knows how to
+        # read. The closed notice is matched on its wording, and the category is
+        # taken as Google words it, so both would silently change meaning if the
+        # machine's locale did.
+        page = browser.new_context(locale="en-US").new_page()
         try:
             for i, (url, title) in enumerate(todo, 1):
                 record = {"key": url, "title": title}
@@ -341,11 +364,13 @@ def main() -> int:
                             name = name_from(page.url)
                             if name:
                                 record["name"] = name
-                            address, category = details_from(page)
+                            address, category, closed = details_from(page)
                             if address:
                                 record["address"] = address
                             if category:
                                 record["category"] = category
+                            if closed:
+                                record["closed"] = closed
                         ok += 1
                         status = f"{found[0]:.6f},{found[1]:.6f}"
                     else:

@@ -263,6 +263,16 @@ export default function Browser({ lists }: { lists: ListView[] }) {
                       {p.address}
                     </div>
                   )}
+                  {/* A closed place keeps its pin, because it is still where it
+                      was and the list is a record of what was saved. Saying so
+                      is the whole fix: nothing else about the row differs. */}
+                  {p.closed && (
+                    <div className="mt-0.5 text-xs font-medium text-rose-600">
+                      {p.closed === "permanently"
+                        ? "Permanently closed"
+                        : "Temporarily closed"}
+                    </div>
+                  )}
                   {p.note && (
                     <div className="mt-1 text-sm text-neutral-600">{p.note}</div>
                   )}

@@ -13,6 +13,10 @@ export interface PlaceView {
   mapsUrl: string | null;
   address: string | null;
   category: string | null;
+  // "permanently" or "temporarily" when the place's own map page said it has
+  // shut. Worth surfacing because nothing else about the row differs: a closed
+  // restaurant has the same title, address and pin as an open one.
+  closed: "permanently" | "temporarily" | null;
   lat: number | null;
   lng: number | null;
   // Where the coordinates above came from, so the UI can say how much to trust

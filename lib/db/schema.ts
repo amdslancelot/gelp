@@ -130,6 +130,15 @@ export const placeCoords = pgTable("place_coords", {
   // snake_case vocabulary the Places API uses ("bar") so one place does not
   // appear under two spellings of one category.
   category: text("category"),
+  // "permanently" or "temporarily", when the map page said so; null when it did
+  // not. A closed place is still a place and keeps its position — this only
+  // records that going there would be a wasted trip, which is not otherwise
+  // visible: nothing else about a closed listing looks any different.
+  //
+  // Read from the notice's wording, because Google marks it up with no
+  // attribute and no stable class. The browser's locale is pinned for exactly
+  // this reason.
+  closed: text("closed", { enum: ["permanently", "temporarily"] }),
   // "browser" — read from the settled URL of the place's own Maps page.
   // "url"     — the export's own URL already stated the position.
   source: text("source", { enum: ["browser", "url"] }).notNull(),

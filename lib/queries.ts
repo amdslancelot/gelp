@@ -74,6 +74,9 @@ export async function loadLists(userId: string): Promise<ListView[]> {
         resolver: sql<
           string | null
         >`case when ${placeCoords.lat} is not null then 'coords' else ${placeCache.resolver} end`,
+        // Nothing about a closed listing looks different otherwise, so this is
+        // the only way it reaches the page at all.
+        closed: placeCoords.closed,
         status: placeCache.status,
         queued: sql<boolean>`${placeQueue.status} = 'pending'`,
       })
