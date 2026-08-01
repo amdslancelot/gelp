@@ -143,6 +143,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "meal_takeaway",
     "catering_service",
     "caterer",
+    "fusion_restaurant",
+    "soup_restaurant",
     "food",
   ],
 
@@ -180,6 +182,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "vineyard",
     "night_club",
     "karaoke_bar",
+    "hookah_bar",
+    "beer_garden",
     "adult_entertainment_club",
   ],
 
@@ -270,6 +274,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "event_venue",
     "banquet_hall",
     "wedding_venue",
+    // A water park is rides and queues, not somewhere green to sit — it belongs
+    // with the theme park rather than with the parks.
+    "water_park",
     "farm",
     "ranch",
   ],
@@ -319,6 +326,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "tea_store",
     "cannabis_store",
     "auto_parts_store",
+    "bicycle_store",
   ],
   grocery_store: [
     "supermarket",
@@ -345,11 +353,13 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "golf_course",
     "golf_club",
     "miniature_golf_course",
+    "indoor_golf_course",
     "race_course",
   ],
   health: [
     "medical_clinic",
     "doctor",
+    "dentist",
     "chiropractor",
     "spa",
     "wellness_center",
@@ -381,6 +391,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "rest_stop",
     "car_rental",
     "transportation_service",
+    "ferry_service",
   ],
 
   // --- everything else ---------------------------------------------------
@@ -390,7 +401,13 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "car_dealer",
     "used_car_dealer",
     "laundry",
+    // Grooming sits with the barber rather than under health: a haircut is an
+    // appointment, not a treatment, and nothing here is clinical.
     "barber_shop",
+    "hair_salon",
+    "nail_salon",
+    "beauty_salon",
+    "tanning_studio",
     "travel_agency",
     "tour_agency",
   ],
@@ -400,6 +417,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "coworking_space",
     "manufacturer",
     "wholesaler",
+    "supplier",
+    "summer_camp_organizer",
     "general_contractor",
     "consultant",
     "interior_designer",
@@ -416,7 +435,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "community_center",
     "cultural_center",
   ],
-  residential: ["apartment_building", "condominium_complex"],
+  residential: ["apartment_building", "apartment_complex", "condominium_complex"],
   // Google's own "we could not say" labels. Kept rather than hidden, because a
   // saved place with no useful category is still a saved place.
   other: ["point_of_interest", "premise", "intersection"],
