@@ -4,6 +4,12 @@ Gelp is a personal web app for browsing your Google Maps saved lists in a fast t
 
 Google offers no API for saved lists, so Gelp imports a **Google Takeout "Saved" export** instead — either uploaded manually on the import page, or synced nightly from a Google Drive folder by a service account. Place categories and coordinates come from the Google Places API and are cached in Postgres, so each place costs **one** Places API call ever, across all re-imports. Google sign-in gates everything.
 
+An export identifies each place but gives no coordinates, and a search by title
+sometimes pins the wrong business — so exact positions can also be read off each
+place's own map page by a hand-run tool, and those are preferred wherever they
+exist. [`docs/place-coordinates.md`](docs/place-coordinates.md) explains why both
+routes are kept.
+
 ## Architecture
 
 | Layer | Where | What |
@@ -234,7 +240,10 @@ block of its own, and the wildcard DNS record already resolves the host.
 app/                  Next.js routes (three-column UI at /, /import, /login, /s/<token>, API routes)
 lib/                  Takeout parser, import pipeline, Places client, Drive sync, share links, Drizzle schema
 drizzle/              generated SQL migrations (applied automatically at startup)
+docs/                 design notes — see place-coordinates.md for why a place's position has two sources
 scripts/selfcheck.ts  offline end-to-end check of the import pipeline
+scripts/resolve-cids.py, load-resolved.ts, dump-queue.ts
+                      the hand-run loop that reads exact positions off each place's own map page
 deploy/               Dockerfile, Kustomize k8s (base + staging/prod overlays), stage.sh, deploy.sh, setup-server.sh (onboarding onto the platform node)
 .env.example          every environment variable, documented
 ```
