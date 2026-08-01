@@ -61,11 +61,21 @@ import sys
 import time
 from pathlib import Path
 
-# The place's own position, as Google writes it into the settled URL. `!3d/!4d`
-# is the place; `@lat,lng` is the map viewport, which is centred on the place
-# but rounded. Prefer the former and fall back to the latter.
+# The place's own position, as Google writes it into the settled URL.
+#
+# `@lat,lng` also appears there and is tempting, but it is the map *viewport*,
+# not the place. When a page resolves, the viewport is centred on the place and
+# the two agree to within rounding; when it does not — the id is dead, the load
+# timed out, a consent wall appeared — the viewport is wherever the map opened
+# by default, which is near whoever is running this. Reading it then produces a
+# confident coordinate for a place the browser never actually found.
+#
+# That is not a hypothetical: an earlier run of this script resolved 110 places
+# to a single point, identical to seven decimal places, a few miles from this
+# laptop. Angkor Thom came back in San Jose. So only `!3d/!4d` counts, and a
+# page that does not produce it is reported as a failure — which is recoverable,
+# where a plausible wrong answer written into an authoritative table is not.
 PLACE_RE = re.compile(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)")
-VIEWPORT_RE = re.compile(r"@(-?\d+\.\d+),(-?\d+\.\d+)")
 
 # A URL that already names its position needs no browser at all.
 PINNED_RE = re.compile(r"/maps/(?:search|place|dir)/(-?\d+\.\d+),(-?\d+\.\d+)")
@@ -125,7 +135,7 @@ def load_done(out: Path) -> set[str]:
 
 
 def coords_from(url: str) -> tuple[float, float] | None:
-    for pattern in (PLACE_RE, VIEWPORT_RE, PINNED_RE):
+    for pattern in (PLACE_RE, PINNED_RE):
         m = pattern.search(url)
         if m:
             lat, lng = float(m.group(1)), float(m.group(2))
