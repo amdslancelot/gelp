@@ -55,8 +55,16 @@ export async function loadLists(userId: string): Promise<ListView[]> {
         title: places.title,
         note: places.note,
         mapsUrl: places.mapsUrl,
-        address: placeCache.address,
-        category: placeCache.category,
+        // Same precedence as the coordinates, for the same reason: an address
+        // read off the place's own page beats one a text search guessed at.
+        // Without this a corrected pin sits in Bali under a San Francisco
+        // address, which reads as a bug in the map rather than in the text.
+        address: sql<
+          string | null
+        >`coalesce(${placeCoords.address}, ${placeCache.address})`,
+        category: sql<
+          string | null
+        >`coalesce(${placeCoords.category}, ${placeCache.category})`,
         lat: sql<
           number | null
         >`coalesce(${placeCoords.lat}, ${placeCache.lat})`,

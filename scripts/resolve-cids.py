@@ -60,6 +60,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 # The place's own position, as Google writes it into the settled URL.
 #
@@ -144,9 +145,71 @@ def coords_from(url: str) -> tuple[float, float] | None:
     return None
 
 
+# The name Google settled on, out of the URL rather than the page: a resolved
+# place page is `/maps/place/<name>/@…`. Kept to the same standard as the
+# coordinates — read from the address bar, which changes far less often than
+# the document — so it can be trusted as a check that the right page loaded.
+NAME_RE = re.compile(r"/maps/place/([^/@]+)/")
+
+
+def name_from(url: str) -> str | None:
+    m = NAME_RE.search(url)
+    if not m:
+        return None
+    name = unquote(m.group(1).replace("+", " ")).strip()
+    return name or None
+
+
+# The address and the category are not in the URL, so these are the one place
+# this script reads the document. Both are best-effort by design: the position
+# is the job, and a page that has rearranged itself should cost us an address,
+# never a coordinate and never a wrong answer.
+#
+# `data-item-id` is a semantic attribute Google puts on the address row, which
+# makes it the sturdiest handle available. The category button has no such
+# attribute and is matched on its `jsaction`, which is frankly fragile — if it
+# starts coming back empty, that is the reason.
+def details_from(page) -> tuple[str | None, str | None]:
+    address = None
+    category = None
+    # The URL gains its coordinates before the panel finishes rendering, so the
+    # caller arrives here early. Wait for the address row specifically rather
+    # than sleeping a fixed amount: pages that are ready cost nothing, and one
+    # that never renders it costs the timeout once instead of on every place.
+    try:
+        page.wait_for_selector('[data-item-id="address"]', timeout=8000)
+    except Exception:  # noqa: BLE001 - carry on and take whatever is there
+        pass
+    try:
+        el = page.query_selector('[data-item-id="address"]')
+        if el:
+            label = el.get_attribute("aria-label") or ""
+            # Rendered as "Address: 1 Example St, …".
+            address = label.split(":", 1)[-1].strip() or None
+    except Exception:  # noqa: BLE001 - a missing detail is not a failed place
+        pass
+    try:
+        el = page.query_selector('button[jsaction*="category"]')
+        if el:
+            category = (el.inner_text() or "").strip() or None
+    except Exception:  # noqa: BLE001
+        pass
+    return address, category
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--takeout", default="~/Downloads/Takeout/Saved")
+    ap.add_argument(
+        "--details",
+        action="store_true",
+        help=(
+            "also read the name, address and category off the page. Off by "
+            "default: the position comes from the URL and is sturdy, these come "
+            "from the document and are not, so a run that only needs "
+            "coordinates should not depend on them."
+        ),
+    )
     ap.add_argument(
         "--input",
         help=(
@@ -272,6 +335,17 @@ def main() -> int:
                         record["lat"], record["lng"] = found
                         record["source"] = "browser"
                         record["resolved_at"] = int(time.time() * 1000)
+                        # Only worth reading once the page has resolved: before
+                        # that the panel belongs to no place, or to the last one.
+                        if args.details:
+                            name = name_from(page.url)
+                            if name:
+                                record["name"] = name
+                            address, category = details_from(page)
+                            if address:
+                                record["address"] = address
+                            if category:
+                                record["category"] = category
                         ok += 1
                         status = f"{found[0]:.6f},{found[1]:.6f}"
                     else:

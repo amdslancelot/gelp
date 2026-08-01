@@ -114,6 +114,22 @@ export const placeCoords = pgTable("place_coords", {
   // What the place was called when this was resolved. Not authoritative — the
   // point of this table is the coordinates — but it makes a row readable.
   title: text("title"),
+  // Read off the same page as the coordinates, and true of the same place.
+  //
+  // These live here rather than only in `place_cache` because they are the same
+  // kind of fact as the position: observed on the place's own map page, not
+  // guessed at from a title. Keeping them in the cache alone would mean a
+  // correction that survives nothing — clear the cache and the address reverts
+  // to whichever business a text search had matched.
+  //
+  // Both are optional. The position comes out of the URL, but these come out of
+  // the page, which changes far more often; a run that cannot find them leaves
+  // them null rather than writing something worse than nothing.
+  address: text("address"),
+  // The category as the map page words it ("Bar"), normalised to the same
+  // snake_case vocabulary the Places API uses ("bar") so one place does not
+  // appear under two spellings of one category.
+  category: text("category"),
   // "browser" — read from the settled URL of the place's own Maps page.
   // "url"     — the export's own URL already stated the position.
   source: text("source", { enum: ["browser", "url"] }).notNull(),

@@ -42,6 +42,9 @@ interface Line {
   resolved_at?: number;
   error?: string;
   settled?: string; // where the browser ended up, when it did not resolve
+  name?: string; // the name Google settled on, from the URL
+  address?: string; // read off the page, when the run asked for details
+  category?: string; // likewise, in the page's own wording
 }
 
 // One row ready for place_tombstone: an id Google would not resolve.
@@ -65,6 +68,27 @@ interface Row {
   lng: number;
   source: "browser" | "url";
   resolvedAt: number;
+  // Null unless the run was asked for details, or the page did not show them.
+  // Null means "not observed", never "the place has none", so these only ever
+  // overwrite when present.
+  address: string | null;
+  category: string | null;
+}
+
+// Google words a category for a reader ("Cocktail bar"); the Places API words
+// the same thing as a type (`cocktail_bar`), and the app already has thousands
+// of rows in that vocabulary. Writing both spellings would split one category
+// into two entries in the filter list, so scraped categories are folded into
+// the existing form. Anything that does not fold cleanly is reported rather
+// than written — see the summary in `main`.
+export function normaliseCategory(raw?: string): string | null {
+  if (!raw) return null;
+  const folded = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return folded === "" ? null : folded;
 }
 
 function parse(path: string): {
@@ -130,6 +154,8 @@ function parse(path: string): {
       lng: row.lng,
       source: row.source === "url" ? "url" : "browser",
       resolvedAt: row.resolved_at ?? Date.now(),
+      address: row.address?.trim() || null,
+      category: normaliseCategory(row.category),
     });
   }
 
@@ -250,6 +276,41 @@ async function main() {
       }
     }
 
+    // What the scraped categories would do to the filter list. A category that
+    // already exists merges; one that does not becomes a new entry, and a near
+    // miss ("bar_and_grill" against an existing "bar") splits one group into
+    // two. Reported before anything is written, because the vocabularies come
+    // from different places and only a reader can say whether a new name is a
+    // real distinction or a duplicate.
+    const scraped = new Set(
+      rows.map((r) => r.category).filter((c): c is string => Boolean(c)),
+    );
+    if (scraped.size > 0) {
+      const existing = new Set(
+        (
+          await db
+            .selectDistinct({ category: placeCache.category })
+            .from(placeCache)
+        )
+          .map((r) => r.category)
+          .filter((c): c is string => Boolean(c)),
+      );
+      const novel = [...scraped].filter((c) => !existing.has(c)).sort();
+      console.log(
+        `\n${scraped.size} distinct categories scraped, ` +
+          `${scraped.size - novel.length} already in use`,
+      );
+      if (novel.length > 0) {
+        console.log(`${novel.length} would be new to the filter list:`);
+        for (const c of novel) console.log(`  ${c}`);
+      }
+    }
+
+    const addresses = rows.filter((r) => r.address !== null).length;
+    if (addresses > 0) {
+      console.log(`\n${addresses} addresses read off the page`);
+    }
+
     if (!apply) {
       console.log("\ndry run — nothing written. Pass --apply to write.");
       return;
@@ -273,6 +334,8 @@ async function main() {
           title: r.title,
           source: r.source,
           resolvedAt: r.resolvedAt,
+          address: r.address,
+          category: r.category,
         }));
         const set = {
           lat: sql`excluded.lat`,
@@ -282,6 +345,11 @@ async function main() {
           mapsUrl: sql`excluded.maps_url`,
           source: sql`excluded.source`,
           resolvedAt: sql`excluded.resolved_at`,
+          // A run without `--details` says nothing about these, so it must not
+          // erase what a run with them found. `coalesce` keeps the old value
+          // when the incoming one is null.
+          address: sql`coalesce(excluded.address, ${placeCoords.address})`,
+          category: sql`coalesce(excluded.category, ${placeCoords.category})`,
         };
         const done = await db
           .insert(placeCoords)
@@ -340,6 +408,13 @@ async function main() {
           status: "ok",
           resolver: RESOLVER_COORDS,
           fetchedAt: Date.now(),
+          // Only when observed. A cached address is wrong exactly when the
+          // search that wrote it found a different business, which is the same
+          // case where the coordinates moved — so leaving a stale one in place
+          // is not neutral. But writing a null over it is not better, and a run
+          // that did not look has nothing to say.
+          ...(row.address === null ? {} : { address: row.address }),
+          ...(row.category === null ? {} : { category: row.category }),
         })
         .where(inArray(placeCache.key, keys))
         .returning({ key: placeCache.key });
