@@ -177,6 +177,46 @@ export const placeQueue = pgTable(
   (t) => [index("place_queue_status_idx").on(t.status)],
 );
 
+// Feature ids Google will not resolve any more — a tombstone for each.
+//
+// A tombstone is a row whose whole purpose is to record an absence, so that
+// later work can tell "we know there is nothing here" apart from "we have not
+// looked yet". Without one the two are indistinguishable, and a queue full of
+// places that can never resolve is retried forever.
+//
+// What is dead is the *id*, not necessarily the place. Opening the URL used to
+// land on the place's own map page; it now settles on a blank map with the
+// feature id stripped out of the URL — Google's way of saying it has no entry
+// under that id. Some of these really are gone (a body shop, a house that was
+// built over). Others plainly exist: Angkor Thom is still there, its saved id
+// simply is not. So this records what cannot be resolved, and says nothing
+// about what is or is not in the world.
+//
+// Named for what it is asked, not for what it describes: the only question this
+// table answers is "is this CID dead?". It is not a `place_` table — it holds
+// no place, and nothing joins to it for one. A place saved as bare coordinates
+// can never be here, because it has no id to lose.
+//
+// So a lookup is by CID and only by CID. A search by title is a different
+// route entirely — it never had the id and does not lose anything when the id
+// dies — and is deliberately not gated on this.
+export const tombstoneCid = pgTable("tombstone_cid", {
+  id: text("id").primaryKey(),
+  cid: text("cid").notNull().unique(),
+  ftid: text("ftid"),
+  // The URL that no longer resolves, kept so a row can be re-checked by hand.
+  mapsUrl: text("maps_url").notNull(),
+  // What the export called it. Often the only human-readable trace left.
+  title: text("title"),
+  // Where the browser ended up instead. The evidence for the row, so a future
+  // reader can judge whether the conclusion still holds rather than trusting
+  // it — Google's URL shapes are undocumented and do change.
+  settledUrl: text("settled_url"),
+  noticedAt: bigint("noticed_at", { mode: "number" })
+    .notNull()
+    .default(nowMillis),
+});
+
 // Enrichment cache keyed so that each real-world place costs at most one
 // Places API call ever, even across re-imports. The cache is deliberately
 // global rather than per-user: the data in it is public (name, address,
