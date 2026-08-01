@@ -52,7 +52,11 @@ interface Row {
   resolvedAt: number;
 }
 
-function parse(path: string): { rows: Row[]; skipped: number } {
+function parse(path: string): {
+  rows: Row[];
+  skipped: number;
+  clustered: Array<[string, number]>;
+} {
   // Keyed by whatever identifies the row, so a place resolved twice — the bulk
   // run and again after a flag — collapses to one row, the later one winning.
   const byIdentity = new Map<string, Row>();
@@ -95,7 +99,31 @@ function parse(path: string): { rows: Row[]; skipped: number } {
     });
   }
 
-  return { rows: [...byIdentity.values()], skipped };
+  // Distinct places do not share a coordinate to seven decimal places. When
+  // several do, the number is not a position that was read off a map — it is
+  // whatever the map happened to be showing when it failed to find the place,
+  // which is the same default for every one of them. Refuse the whole cluster
+  // and say so: this table is never re-queried, so a wrong row here is
+  // permanent in a way a wrong row anywhere else is not.
+  //
+  // Two is left alone. Neighbouring shops in one building genuinely round to
+  // the same point, and that is a real answer.
+  const byPoint = new Map<string, Row[]>();
+  for (const row of byIdentity.values()) {
+    const at = `${row.lat},${row.lng}`;
+    const seen = byPoint.get(at);
+    if (seen) seen.push(row);
+    else byPoint.set(at, [row]);
+  }
+
+  const kept: Row[] = [];
+  const clustered: Array<[string, number]> = [];
+  for (const [at, group] of byPoint) {
+    if (group.length < 3) kept.push(...group);
+    else clustered.push([at, group.length]);
+  }
+
+  return { rows: kept, skipped, clustered };
 }
 
 async function main() {
@@ -107,10 +135,16 @@ async function main() {
     process.exit(1);
   }
 
-  const { rows, skipped } = parse(resolve(path));
+  const { rows, skipped, clustered } = parse(resolve(path));
   console.log(`${rows.length} resolved coordinates in ${path}`);
   if (skipped > 0) {
     console.log(`${skipped} skipped: no place behind the URL`);
+  }
+  for (const [at, count] of clustered) {
+    console.log(
+      `${count} rejected: ${count} places cannot share the point ${at} — ` +
+        `this is a map that never found them, not a position`,
+    );
   }
   if (rows.length === 0) return;
 
