@@ -36,12 +36,14 @@ export interface PlaceView {
   queued: boolean;
 }
 
-// A list plus its resolved places and a place count.
-export interface ListView {
+// A list as the sidebar shows it: named and counted, with no places attached.
+// The places for whichever list is open are loaded on their own, because
+// carrying all of them into every page load meant serialising every place in
+// the account — thousands of them — to render one screenful.
+export interface ListSummary {
   id: string;
   name: string;
   count: number;
-  places: PlaceView[];
 }
 
 // The id of the built-in list of places with no position. Not a row in `lists`

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { loadSharedMap } from "@/lib/queries";
+import { loadSharedListPlaces, loadSharedMap } from "@/lib/queries";
 import Browser from "@/app/components/Browser";
 
 // Reads the database, and the token is per-request, so nothing here is static.
@@ -27,6 +27,12 @@ export default async function SharedMapPage({
   // would tell a stranger whether a token was ever real.
   if (!shared) notFound();
 
+  // As on the owner's own page, only the first list travels with the HTML; the
+  // rest are fetched through the token-authorised route as they are opened.
+  const initialPlaces = shared.lists[0]
+    ? ((await loadSharedListPlaces(token, shared.lists[0].id)) ?? [])
+    : [];
+
   return (
     <div className="flex h-screen flex-col">
       <header className="flex items-center justify-between gap-3 border-b border-neutral-200 bg-white px-4 py-2.5">
@@ -42,7 +48,11 @@ export default async function SharedMapPage({
           Read-only
         </span>
       </header>
-      <Browser lists={shared.lists} />
+      <Browser
+        lists={shared.lists}
+        initialPlaces={initialPlaces}
+        placesUrl={`/api/s/${encodeURIComponent(token)}/places?list={id}`}
+      />
     </div>
   );
 }
