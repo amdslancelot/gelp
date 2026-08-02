@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   UNLOCATED_LIST_ID,
   unlocatedReason,
-  type ListView,
+  type ListSummary,
   type PlaceView,
   type UnlocatedReason,
 } from "@/lib/place-view";
@@ -56,6 +56,14 @@ const MapView = dynamic(() => import("./MapView"), {
 // A special filter value meaning "no category filter applied".
 const ALL = "__all__";
 
+// How many rows the middle column draws before it stops and offers the rest on
+// request. The largest list here holds 2788 places, and rendering all of them
+// costs about 1.2 MB of server-rendered HTML that the browser then has to
+// hydrate — for a list nobody scrolls to the end of. Worse, on load it is
+// rendered before the map has reported a viewport, so within a few hundred
+// milliseconds all but a screenful are thrown away again.
+const ROWS_BEFORE_MORE = 100;
+
 // True when a place's coordinates fall inside the map's current viewport. The
 // longitude test tolerates a viewport that straddles the antimeridian (where
 // west > east). Places without coordinates aren't on the map, so they're out.
@@ -69,10 +77,37 @@ function inBounds(p: PlaceView, b: MapBounds): boolean {
   return latOk && lngOk;
 }
 
-export default function Browser({ lists }: { lists: ListView[] }) {
+export default function Browser({
+  lists,
+  initialPlaces,
+  placesUrl,
+}: {
+  lists: ListSummary[];
+  // The places of the list that opens first, rendered with the page so the
+  // first screen costs no round trip.
+  initialPlaces: PlaceView[];
+  // Where to fetch another list's places, with `{id}` standing in for the list.
+  // A template rather than a fixed path because a shared map reads through a
+  // token-authorised route rather than the session one.
+  placesUrl: string;
+}) {
+  const firstListId = lists[0]?.id ?? null;
   const [selectedListId, setSelectedListId] = useState<string | null>(
-    lists[0]?.id ?? null,
+    firstListId,
   );
+  // Places are kept per list, so going back to one already opened is instant
+  // and costs no second request.
+  const [placesByList, setPlacesByList] = useState<Record<string, PlaceView[]>>(
+    () => (firstListId ? { [firstListId]: initialPlaces } : {}),
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped by Retry, so a failed load can be asked for again without changing
+  // anything else the fetch depends on.
+  const [reloadTick, setReloadTick] = useState(0);
+
+  const places = selectedListId ? placesByList[selectedListId] : undefined;
+  const loading = selectedListId !== null && places === undefined && !loadError;
+
   // The filter is two-tier: an umbrella, then optionally one category under it.
   // `leaf` is null while the whole umbrella is selected, and is always inside
   // `umbrella` — picking a new umbrella clears it.
@@ -92,18 +127,82 @@ export default function Browser({ lists }: { lists: ListView[] }) {
   // is open. Both are inert at md+ where all three columns are visible at once.
   const [mobileTab, setMobileTab] = useState<"list" | "map">("list");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Set once the user asks for the rows past ROWS_BEFORE_MORE. Cleared whenever
+  // the list or the filter changes, because that is a different set of places
+  // and the request was about the old one.
+  const [showAllRows, setShowAllRows] = useState(false);
+
+  // Fetch the selected list's places the first time it is opened. Everything
+  // else on the page reads `places`, so this is the only thing that knows the
+  // places arrive separately from the list they belong to.
+  useEffect(() => {
+    if (!selectedListId || placesByList[selectedListId]) return;
+    const controller = new AbortController();
+    setLoadError(null);
+    fetch(placesUrl.replace("{id}", encodeURIComponent(selectedListId)), {
+      signal: controller.signal,
+    })
+      .then((r) =>
+        r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)),
+      )
+      .then((body: { places: PlaceView[] }) =>
+        setPlacesByList((byList) => ({
+          ...byList,
+          [selectedListId]: body.places,
+        })),
+      )
+      .catch((err: Error) => {
+        // An abort is this component moving on, not a failure to report.
+        if (err.name !== "AbortError") setLoadError("Couldn't load this list.");
+      });
+    return () => controller.abort();
+  }, [selectedListId, placesByList, placesUrl, reloadTick]);
 
   const selectedList = useMemo(
     () => lists.find((l) => l.id === selectedListId) ?? null,
     [lists, selectedListId],
   );
 
+  // The built-in "No coordinates" list is, by definition, nowhere on the map,
+  // so narrowing it to the viewport would always empty it.
+  const isUnlocated = selectedListId === UNLOCATED_LIST_ID;
+
+  // The selected list narrowed to the map's current viewport — the set the user
+  // can actually see. Until the map reports its first bounds this is everything,
+  // so nothing is ever empty on load. Category filtering is deliberately not
+  // applied here: the chips count off this set, and a chip has to keep counting
+  // its own category even while a different one is selected.
+  const boundedPlaces = useMemo(() => {
+    const all = places ?? [];
+    if (isUnlocated || !filterToView || !mapBounds) return all;
+    return all.filter((p) => inBounds(p, mapBounds));
+  }, [places, filterToView, mapBounds, isUnlocated]);
+
+  // How many places each umbrella and each category has inside the viewport.
+  // This is what the chips display, so their numbers and the list below them
+  // are always the same claim about the same places.
+  const inView = useMemo(() => {
+    const byUmbrella = new Map<string, number>();
+    const byCategory = new Map<string, number>();
+    for (const p of boundedPlaces) {
+      if (!p.category) continue;
+      const t = tier1Of(p.category);
+      byUmbrella.set(t, (byUmbrella.get(t) ?? 0) + 1);
+      byCategory.set(p.category, (byCategory.get(p.category) ?? 0) + 1);
+    }
+    return { byUmbrella, byCategory };
+  }, [boundedPlaces]);
+
   // The umbrellas present in the selected list, biggest first. A list of 200
   // places can carry 60 categories, which is not a row anyone reads; the
   // umbrella is what makes the first choice small enough to scan.
+  // Which chips exist, and their order, come from the whole list rather than
+  // the viewport: a row that reshuffles under the thumb on every pan can't be
+  // aimed at, and a chip that vanishes takes away the way back to its places.
+  // Only the number on each chip follows the map.
   const umbrellas = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const p of selectedList?.places ?? []) {
+    for (const p of places ?? []) {
       if (!p.category) continue;
       const t = tier1Of(p.category);
       counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -111,7 +210,7 @@ export default function Browser({ lists }: { lists: ListView[] }) {
     return Array.from(counts).sort(
       (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
     );
-  }, [selectedList]);
+  }, [places]);
 
   // The categories under the chosen umbrella that this list actually has. One
   // of them means the umbrella is already as narrow as the data goes, so the
@@ -119,7 +218,7 @@ export default function Browser({ lists }: { lists: ListView[] }) {
   const leaves = useMemo(() => {
     if (umbrella === ALL) return [];
     const counts = new Map<string, number>();
-    for (const p of selectedList?.places ?? []) {
+    for (const p of places ?? []) {
       if (p.category && tier1Of(p.category) === umbrella) {
         counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
       }
@@ -127,31 +226,39 @@ export default function Browser({ lists }: { lists: ListView[] }) {
     return Array.from(counts).sort(
       (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
     );
-  }, [selectedList, umbrella]);
+  }, [places, umbrella]);
 
   // Places mapped (all markers for the selected list), after category filtering.
+  // Never narrowed to the viewport: the markers are what defines the viewport,
+  // and feeding the map's own bounds back into its markers would have it re-fit
+  // to an ever-smaller set.
   const visiblePlaces = useMemo(() => {
-    const all = selectedList?.places ?? [];
+    const all = places ?? [];
     if (umbrella === ALL) return all;
     if (leaf) return all.filter((p) => p.category === leaf);
     return all.filter((p) => p.category && tier1Of(p.category) === umbrella);
-  }, [selectedList, umbrella, leaf]);
+  }, [places, umbrella, leaf]);
 
-  // Places shown in the middle column: the mapped set, optionally narrowed to
-  // the map's current viewport. Until the map reports its first bounds we show
-  // everything, so the list is never empty on load.
-  // The built-in "No coordinates" list is, by definition, nowhere on the map,
-  // so narrowing it to the viewport would always empty it.
-  const isUnlocated = selectedListId === UNLOCATED_LIST_ID;
-
+  // Places shown in the middle column: what's in view, then the category filter.
   const listedPlaces = useMemo(() => {
-    if (isUnlocated || !filterToView || !mapBounds) return visiblePlaces;
-    return visiblePlaces.filter((p) => inBounds(p, mapBounds));
-  }, [visiblePlaces, filterToView, mapBounds, isUnlocated]);
+    if (umbrella === ALL) return boundedPlaces;
+    if (leaf) return boundedPlaces.filter((p) => p.category === leaf);
+    return boundedPlaces.filter(
+      (p) => p.category && tier1Of(p.category) === umbrella,
+    );
+  }, [boundedPlaces, umbrella, leaf]);
+
+  // What actually reaches the DOM, and how much was held back.
+  const shownPlaces = useMemo(
+    () => (showAllRows ? listedPlaces : listedPlaces.slice(0, ROWS_BEFORE_MORE)),
+    [listedPlaces, showAllRows],
+  );
+  const heldBack = listedPlaces.length - shownPlaces.length;
 
   const selectUmbrella = (t: string) => {
     setUmbrella(t);
     setLeaf(null);
+    setShowAllRows(false);
   };
 
   const selectList = (id: string) => {
@@ -159,6 +266,7 @@ export default function Browser({ lists }: { lists: ListView[] }) {
     selectUmbrella(ALL);
     setFocus(null);
     setDrawerOpen(false);
+    setShowAllRows(false);
     // Drop the stale viewport so the new list shows all its places immediately;
     // the map re-fits to the new markers and reports fresh bounds a beat later.
     setMapBounds(null);
@@ -222,26 +330,35 @@ export default function Browser({ lists }: { lists: ListView[] }) {
           the second only once an umbrella with more than one category under it
           is chosen. */}
       <div className="border-b border-neutral-200 bg-white md:col-span-2">
-        <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap px-4 py-2.5">
-          <Chip
-            label="All"
-            active={umbrella === ALL}
-            onClick={() => selectUmbrella(ALL)}
-          />
-          {umbrellas.map(([t, n]) => (
+        <div className="flex items-center px-4 py-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap">
+            {/* Counted off `boundedPlaces` rather than the per-category
+                tallies, because "All" includes the places carrying no category
+                at all — and it has to agree with the list, which shows them. */}
             <Chip
-              key={t}
-              label={humanizeCategory(t)}
-              count={n}
-              active={umbrella === t}
-              onClick={() => selectUmbrella(t)}
+              label="All"
+              count={boundedPlaces.length}
+              active={umbrella === ALL}
+              onClick={() => selectUmbrella(ALL)}
             />
-          ))}
-          {/* Toggle: narrow the list to what's inside the current map viewport. */}
+            {umbrellas.map(([t]) => (
+              <Chip
+                key={t}
+                label={humanizeCategory(t)}
+                count={inView.byUmbrella.get(t) ?? 0}
+                active={umbrella === t}
+                onClick={() => selectUmbrella(t)}
+              />
+            ))}
+          </div>
+          {/* Toggle: narrow the list to what's inside the current map viewport.
+              It sits outside the scrolling chip row on purpose — inside it, a
+              list with sixty categories pushed the control that explains an
+              empty list off the right edge of every phone. */}
           <button
             onClick={() => setFilterToView((v) => !v)}
             aria-pressed={filterToView}
-            className={`ml-auto shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
+            className={`ml-2 shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
               filterToView
                 ? "border-rose-500 bg-rose-500 text-white"
                 : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
@@ -254,16 +371,20 @@ export default function Browser({ lists }: { lists: ListView[] }) {
           <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-t border-neutral-100 bg-neutral-50 px-4 py-2">
             <Chip
               label={`All ${humanizeCategory(umbrella)}`}
+              count={inView.byUmbrella.get(umbrella) ?? 0}
               active={leaf === null}
               onClick={() => setLeaf(null)}
             />
-            {leaves.map(([c, n]) => (
+            {leaves.map(([c]) => (
               <Chip
                 key={c}
                 label={humanizeCategory(c)}
-                count={n}
+                count={inView.byCategory.get(c) ?? 0}
                 active={leaf === c}
-                onClick={() => setLeaf(c)}
+                onClick={() => {
+                  setLeaf(c);
+                  setShowAllRows(false);
+                }}
               />
             ))}
           </div>
@@ -285,7 +406,7 @@ export default function Browser({ lists }: { lists: ListView[] }) {
           </p>
         )}
         <ul className="flex-1 overflow-y-auto divide-y divide-neutral-100">
-          {listedPlaces.map((p) => {
+          {shownPlaces.map((p) => {
             const reason = REASONS[unlocatedReason(p)];
             const unplaced = p.lat === null || p.lng === null;
             return (
@@ -349,11 +470,40 @@ export default function Browser({ lists }: { lists: ListView[] }) {
               </li>
             );
           })}
-          {listedPlaces.length === 0 && (
+          {loading && (
+            <li className="px-4 py-6 text-sm text-neutral-400">Loading…</li>
+          )}
+          {loadError && (
+            <li className="px-4 py-6 text-sm text-neutral-500">
+              {loadError}{" "}
+              <button
+                onClick={() => {
+                  setLoadError(null);
+                  setReloadTick((t) => t + 1);
+                }}
+                className="font-medium text-rose-600 underline"
+              >
+                Retry
+              </button>
+            </li>
+          )}
+          {!loading && !loadError && listedPlaces.length === 0 && (
             <li className="px-4 py-6 text-sm text-neutral-400">
               {filterToView && mapBounds && visiblePlaces.length > 0
                 ? "No places in this area — zoom out or pan the map."
                 : "No places to show."}
+            </li>
+          )}
+          {/* Says how many rows are being withheld rather than ending the list
+              silently, which would read as "that's all of them". */}
+          {heldBack > 0 && (
+            <li className="px-4 py-4">
+              <button
+                onClick={() => setShowAllRows(true)}
+                className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Show {heldBack} more
+              </button>
             </li>
           )}
         </ul>
@@ -411,7 +561,7 @@ function ListItems({
   selectedListId,
   onSelect,
 }: {
-  lists: ListView[];
+  lists: ListSummary[];
   selectedListId: string | null;
   onSelect: (id: string) => void;
 }) {
