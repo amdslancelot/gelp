@@ -340,6 +340,304 @@ async function loadCache(
   return found;
 }
 
+// Which of these places already have a row on the resolve queue.
+//
+// Matched on the Maps URL because that is what `place_queue` is unique on: the
+// queue is global, so a place another account queued is already going to be
+// resolved and is not new work for this one.
+//
+// Deliberately not scoped to `pending`. What stops a re-import adding a second
+// entry is the unique constraint, which does not care what state the row is in
+// — `enqueuePlaces` conflicts on the URL and does nothing. A dry run that
+// counted only pending rows would report queue work that the import then would
+// not do.
+async function loadQueued(
+  db: Db,
+  urls: Array<string | undefined | null>,
+): Promise<Set<string>> {
+  const unique = [...new Set(urls.filter((u): u is string => Boolean(u)))];
+  const waiting = new Set<string>();
+  for (let i = 0; i < unique.length; i += BATCH_SIZE) {
+    const rows = await db
+      .select({ mapsUrl: placeQueue.mapsUrl })
+      .from(placeQueue)
+      .where(inArray(placeQueue.mapsUrl, unique.slice(i, i + BATCH_SIZE)));
+    for (const row of rows) waiting.add(row.mapsUrl);
+  }
+  return waiting;
+}
+
+// The lists this account already has, and how many places are in each.
+async function loadExistingLists(
+  db: Db,
+  userId: string,
+): Promise<Map<string, number>> {
+  const rows = await db
+    .select({
+      name: lists.name,
+      count: sql<number>`count(${places.id})::int`,
+    })
+    .from(lists)
+    .leftJoin(places, eq(places.listId, lists.id))
+    .where(eq(lists.userId, userId))
+    .groupBy(lists.id, lists.name);
+  return new Map(rows.map((r) => [r.name, r.count]));
+}
+
+// How each place in an export would be resolved if it were imported right now.
+//
+// Disjoint and exhaustive: every place falls in exactly one bucket, so these
+// sum to the place count. The order they are tested in is the same precedence
+// `runImport` uses, and deliberately so — a dry run that answered in a
+// different order would describe an import that does not happen.
+//
+//   exact         — place_coords knows this place; correct, and free
+//   fromUrl       — the export's own URL states the position; correct, and free
+//   cached        — place_cache has it, mirrored from an exact source
+//   cachedGuess   — place_cache has it, but a text search picked it
+//   unverifiable  — the same guess, for a place whose id Google has dropped
+//   cachedMissing — cached as unresolved: looked for before and not found
+//   notPlace      — a saved shopping item or link; never had a position
+//   alreadyQueued — already has a queue row, so re-importing adds nothing
+//   gone          — Google has no entry under this id any more
+//   unknown       — nobody has looked yet. This is the only bucket that costs
+//                   anything: a queue entry, or a Places API call.
+//
+// `cached`, `cachedGuess` and `unverifiable` are one action — use the cached
+// row, pay nothing — split by how much the answer can be trusted, which is the
+// question the confirm screen exists to answer. The last of the three is the
+// one worth naming: its coordinates were guessed from a title, and the place's
+// own map page can no longer be opened to check, because Google has dropped the
+// id. Nothing will ever correct it — a resolve run cannot, since there is no
+// page to read, and flagging it cannot, since `enqueuePlaces` refuses
+// tombstoned ids. The guess is the final answer.
+export interface PlaceBuckets {
+  exact: number;
+  fromUrl: number;
+  cached: number;
+  cachedGuess: number;
+  unverifiable: number;
+  cachedMissing: number;
+  notPlace: number;
+  alreadyQueued: number;
+  gone: number;
+  unknown: number;
+}
+
+type Bucket = keyof PlaceBuckets;
+
+function emptyBuckets(): PlaceBuckets {
+  return {
+    exact: 0,
+    fromUrl: 0,
+    cached: 0,
+    cachedGuess: 0,
+    unverifiable: 0,
+    cachedMissing: 0,
+    notPlace: 0,
+    alreadyQueued: 0,
+    gone: 0,
+    unknown: 0,
+  };
+}
+
+// A place in the export whose Google id is in `tombstone_cid`, listed rather
+// than merely counted.
+//
+// It is listed because it is the one outcome the user can neither wait out nor
+// report: no resolve run will reach it and no flag will queue it. Seeing which
+// places they are is the only way to act — the fix is to open Google Maps and
+// save the place again, which mints a new id.
+export interface DeadPlace {
+  title: string;
+  mapsUrl: string;
+  // The lists it appears in, since the same dead link is often saved twice.
+  lists: string[];
+  // True when a search's guess is standing in for it on the map, false when it
+  // has no pin at all. Both are dead ids; only the first looks fine.
+  guessed: boolean;
+}
+
+// How many dead-id places the analysis carries back. A cap, because this is a
+// list to read, not a dataset — the count beside it is the honest total.
+const DEAD_LIST_LIMIT = 200;
+
+// One list in the export, and what importing it would do to the stored one.
+export interface ListAnalysis {
+  name: string;
+  // Places the export has for this list.
+  places: number;
+  //   new     — no list of this name yet
+  //   replace — a stored list of this name has its places swapped wholesale
+  status: "new" | "replace";
+  // Places the stored list has now. Zero for a new list.
+  existing: number;
+  buckets: PlaceBuckets;
+}
+
+// A stored list the export no longer contains, which importing would delete.
+export interface RemovedList {
+  name: string;
+  places: number;
+}
+
+// What an import of this export would do, worked out without writing anything
+// or asking Google anything.
+export interface ImportAnalysis {
+  lists: ListAnalysis[];
+  // Lists that would be deleted, because a Takeout export is a complete
+  // snapshot and anything missing from it was deleted in Google Maps.
+  removed: RemovedList[];
+  totals: PlaceBuckets;
+  places: number;
+  // A queued import would add this many queue entries: the unknown places,
+  // deduplicated by URL, since the queue is unique on it.
+  wouldQueue: number;
+  // Places whose Google id is dead, deduplicated by URL. Listed, not just
+  // counted, because nothing in the app will ever fix them on its own.
+  dead: DeadPlace[];
+  // How many there are in total, which is what `dead` is a capped view of.
+  deadTotal: number;
+  // Of those, how many currently have a guessed pin standing in for them. The
+  // rest have no pin at all — more honest, and easier to notice.
+  deadGuessed: number;
+  // A fast import would make at least this many Places API calls: every place
+  // nobody has an answer for, deduplicated by cache key. "At least" because the
+  // consensus pass re-asks for answers that land far from their own region, and
+  // how many those are is not knowable until the answers are in.
+  wouldCallApi: number;
+  // True when the export parsed to no lists at all. `runImport` deletes nothing
+  // in that case — far more likely a broken download than an emptied account —
+  // and the confirm screen should say so rather than showing an import that
+  // appears to do nothing.
+  emptyExport: boolean;
+}
+
+// Work out what importing this export would do, as a dry run.
+//
+// Reads only: no cache row is written, no queue entry added, no Places API call
+// made. It answers the two questions worth asking before committing — how much
+// of this is already known, and what would be deleted — using exactly the
+// precedence `runImport` applies, so the numbers describe the import that would
+// actually happen.
+//
+// The one thing it cannot promise is that they still hold at confirm time: the
+// nightly Drive sync could land in between and resolve some of these places, or
+// queue them. So the counts are an estimate of a moment, and the UI says so.
+export async function analyzeImport(
+  db: Db,
+  userId: string,
+  parsed: ParsedTakeout,
+): Promise<ImportAnalysis> {
+  const now = Date.now();
+  const all = parsed.lists.flatMap((l) => l.places);
+
+  // Everything the whole export needs, in one pass rather than per list. The
+  // import loads these per list because it writes between lists; a dry run
+  // writes nothing, so it can ask once.
+  const cache = await loadCache(db, all.map(cacheKeyFor));
+  const cids = all.map((p) => cidFromMapsUrl(p.mapsUrl));
+  const coords = await loadCoords(db, cids);
+  const gone = await loadTombstones(db, cids);
+  const queued = await loadQueued(db, all.map((p) => p.mapsUrl));
+  const existing = await loadExistingLists(db, userId);
+
+  const bucketFor = (place: ParsedPlace): Bucket => {
+    const cid = cidFromMapsUrl(place.mapsUrl);
+    if (cid && coords.has(cid)) return "exact";
+    if (place.lat !== undefined && place.lng !== undefined) return "fromUrl";
+    if (!isPlaceEntry(place)) return "notPlace";
+    const cached = cache.get(cacheKeyFor(place));
+    if (cached && isCacheFresh(cached, now)) {
+      if (cached.lat === null || cached.lng === null) return "cachedMissing";
+      if (cached.resolver !== RESOLVER_SEARCH) return "cached";
+      // A guess whose subject can no longer be looked at. The import does the
+      // same thing either way — take the cached row — but a guess that can
+      // still be corrected and one that never can are not the same answer.
+      return cid && gone.has(cid) ? "unverifiable" : "cachedGuess";
+    }
+    if (cid && gone.has(cid)) return "gone";
+    if (place.mapsUrl && queued.has(place.mapsUrl)) return "alreadyQueued";
+    return "unknown";
+  };
+
+  const totals = emptyBuckets();
+  // Deduplicated the same way the writes are, so the estimates count work
+  // rather than places: the queue is unique on URL, and the cache on key.
+  const queueUrls = new Set<string>();
+  const lookupKeys = new Set<string>();
+  // Every dead-id place, gathered by URL so the same dead link saved to three
+  // lists reads as one problem in three places rather than three problems.
+  const dead = new Map<string, DeadPlace>();
+
+  const analysed: ListAnalysis[] = parsed.lists.map((list) => {
+    const buckets = emptyBuckets();
+    for (const place of list.places) {
+      const bucket = bucketFor(place);
+      buckets[bucket] += 1;
+      totals[bucket] += 1;
+
+      // A place with no Maps URL cannot be queued — there is no page to open —
+      // so a queued import simply leaves it alone.
+      if (bucket === "unknown" && place.mapsUrl) queueUrls.add(place.mapsUrl);
+      // A fast import ignores both the queue and the tombstones: it asks by
+      // title, which neither of them closes off.
+      if (bucket === "unknown" || bucket === "alreadyQueued" || bucket === "gone") {
+        lookupKeys.add(cacheKeyFor(place));
+      }
+      // The two buckets a dead id can land in: pinned by a guess, or not
+      // pinned at all. Both mean the same thing about the link itself.
+      if ((bucket === "unverifiable" || bucket === "gone") && place.mapsUrl) {
+        const seen = dead.get(place.mapsUrl);
+        if (seen) seen.lists.push(list.name);
+        else
+          dead.set(place.mapsUrl, {
+            title: place.title,
+            mapsUrl: place.mapsUrl,
+            lists: [list.name],
+            guessed: bucket === "unverifiable",
+          });
+      }
+    }
+    const stored = existing.get(list.name);
+    return {
+      name: list.name,
+      places: list.places.length,
+      status: stored === undefined ? "new" : "replace",
+      existing: stored ?? 0,
+      buckets,
+    };
+  });
+
+  const importedNames = new Set(parsed.lists.map((l) => l.name));
+  const removed: RemovedList[] =
+    parsed.lists.length === 0
+      ? []
+      : [...existing.entries()]
+          .filter(([name]) => !importedNames.has(name))
+          .map(([name, places]) => ({ name, places }));
+
+  // Guessed pins first: they are the ones that look answered and are not, so
+  // they are what a reader should meet at the top of the list.
+  const deadList = [...dead.values()].sort(
+    (a, b) =>
+      Number(b.guessed) - Number(a.guessed) || a.title.localeCompare(b.title),
+  );
+
+  return {
+    lists: analysed,
+    removed,
+    totals,
+    places: all.length,
+    wouldQueue: queueUrls.size,
+    wouldCallApi: lookupKeys.size,
+    dead: deadList.slice(0, DEAD_LIST_LIMIT),
+    deadTotal: deadList.length,
+    deadGuessed: deadList.filter((d) => d.guessed).length,
+    emptyExport: parsed.lists.length === 0,
+  };
+}
+
 // Import a parsed Takeout into the database for one user. Lists are upserted by
 // (user_id, name) and their places replaced on re-import — atomically, one
 // transaction per list, so a list is never observed emptied. Lists the export
@@ -664,6 +962,12 @@ export async function runImport(
         // was never written.
         cacheKey: cache.has(key) ? key : null,
         cid: cids[index] ?? null,
+        // Derived here rather than read back from the cache, because the cache
+        // is keyed by URL and shared: two unrelated saved items with the same
+        // URL get one cache row between them, and this is a fact about the
+        // entry. Recomputed every import, which is free — it is a regex over a
+        // URL — and cannot go stale as a result.
+        notAPlace: !isPlaceEntry(parsedPlace),
       });
     }
 

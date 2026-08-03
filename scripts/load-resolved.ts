@@ -461,15 +461,28 @@ async function main() {
     }
     if (closed > 0) console.log(`closed ${closed} queue entries`);
 
-    // Record the ids that are gone, and close their queue entries as failed
-    // rather than done. Leaving them pending is the one outcome to avoid: every
-    // later run would dump them, open them, and fail on them again, and the
-    // count of outstanding work would never reach zero.
+    // Record the ids that are gone, and delete their queue entries. Leaving
+    // them pending is the one outcome to avoid: every later run would dump
+    // them, open them, and fail on them again, and the count of outstanding
+    // work would never reach zero.
+    //
+    // Deleted rather than closed as `failed`, because the tombstone is now the
+    // record and it is the better one — it carries the settled URL, which is
+    // the evidence, where a closed queue row carries only the verdict. A row
+    // kept alongside it says nothing new and can outlive its own justification:
+    // `tombstone_cid` has no delete path today, but if a tombstone is ever
+    // cleared by hand, a leftover row would keep blocking the re-queue through
+    // the unique constraint on `maps_url`, silently, and `enqueuePlaces` would
+    // go on returning `added: 0` with nothing left to explain why.
+    //
+    // Not scoped to `pending`: whatever state a row for this URL is in, the
+    // tombstone supersedes it.
     //
     // `doNothing` on the CID keeps the first sighting, which carries the
     // settled URL from when the id actually stopped resolving.
     if (tombs.length > 0) {
       let buried = 0;
+      let dropped = 0;
       for (let i = 0; i < tombs.length; i += 500) {
         const batch = tombs.slice(i, i + 500);
         const done = await db
@@ -489,23 +502,24 @@ async function main() {
           .returning({ id: tombstoneCid.id });
         buried += done.length;
 
-        await db
-          .update(placeQueue)
-          .set({ status: "failed", handledAt: Date.now() })
+        const removed = await db
+          .delete(placeQueue)
           .where(
-            and(
-              eq(placeQueue.status, "pending"),
-              inArray(
-                placeQueue.mapsUrl,
-                batch.map((t) => t.mapsUrl),
-              ),
+            inArray(
+              placeQueue.mapsUrl,
+              batch.map((t) => t.mapsUrl),
             ),
-          );
+          )
+          .returning({ id: placeQueue.id });
+        dropped += removed.length;
       }
       console.log(
         `tombstoned ${buried} ids Google no longer has ` +
           `(${tombs.length - buried} already recorded)`,
       );
+      if (dropped > 0) {
+        console.log(`removed ${dropped} queue entries the tombstones replace`);
+      }
     }
   } finally {
     await pool.end();

@@ -77,6 +77,21 @@ export const places = pgTable("places", {
   // equality instead of a regex over a URL on every read. Nullable: a saved
   // shopping link has no place behind it and so has no id.
   cid: text("cid"),
+  // Whether this saved entry is on a map at all. A Takeout "Saved" list holds
+  // whatever the user starred, and a shopping item or a film is not somewhere
+  // you can go.
+  //
+  // It lives here rather than in `place_cache` because it is a property of this
+  // saved entry, not of a place: `isPlaceEntry` reads it off the entry's own
+  // URL, offline, in microseconds, and it is true or false regardless of what
+  // any other account saved. The cache is keyed by URL and shared by everyone,
+  // which is the wrong grain — several unrelated entries can share one cache
+  // row, and a fact about one of them is not a fact about the others.
+  //
+  // Recomputed on every import rather than remembered, which is exactly what
+  // these rows already do: they are deleted and re-inserted wholesale, so a
+  // derived column costs nothing to keep true and can never drift.
+  notAPlace: boolean("not_a_place").notNull().default(false),
 });
 
 // Coordinates that are simply correct, because they were read off the place's
