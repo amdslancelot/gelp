@@ -30,7 +30,7 @@ import {
 } from "../lib/db/schema";
 import { cidFromMapsUrl, ftidFromMapsUrl } from "../lib/takeout";
 import { haversineMeters } from "../lib/geo";
-import { RESOLVER_COORDS } from "../lib/import";
+import { MAX_RESOLVE_ATTEMPTS, RESOLVER_COORDS } from "../lib/import";
 
 // One line of the scraper's output.
 interface Line {
@@ -46,6 +46,18 @@ interface Line {
   address?: string; // read off the page, when the run asked for details
   category?: string; // likewise, in the page's own wording
   closed?: string; // "permanently" | "temporarily", when the page said so
+}
+
+// One place a run opened and came away from with nothing, where the id itself
+// is not the problem: the feature id was still in the settled URL, so Google
+// does have an entry — the page simply could not be read this time.
+//
+// These used to be dropped on the floor. The row stayed `pending` and was
+// dumped again by the next run, forever, with nothing anywhere recording that
+// it had ever been tried. Counting them is what lets a row eventually stop.
+interface Attempt {
+  mapsUrl: string;
+  error: string;
 }
 
 // One row ready for place_tombstone: an id Google would not resolve.
@@ -103,11 +115,15 @@ function parse(path: string): {
   skipped: number;
   clustered: Array<[string, number]>;
   tombs: Tomb[];
+  attempts: Attempt[];
 } {
   // Keyed by whatever identifies the row, so a place resolved twice — the bulk
   // run and again after a flag — collapses to one row, the later one winning.
   const byIdentity = new Map<string, Row>();
   const byDeadCid = new Map<string, Tomb>();
+  // Keyed by URL for the same reason, and because one file can hold two goes at
+  // the same place: it is one more attempt, not two.
+  const byFailedUrl = new Map<string, Attempt>();
   let skipped = 0;
 
   for (const line of readFileSync(path, "utf8").split("\n")) {
@@ -145,7 +161,18 @@ function parse(path: string): {
       Math.abs(row.lat) > 90 ||
       Math.abs(row.lng) > 180
     ) {
-      continue; // An error line, or a place that could not be resolved.
+      // An error line, or a place that could not be resolved. Not a dead id —
+      // that case returned above — so the entry still exists and this run
+      // simply could not read it. Recorded as an attempt rather than dropped,
+      // so the row can eventually stop being retried forever.
+      if (typeof row.key === "string") {
+        skipped += 1;
+        byFailedUrl.set(row.key, {
+          mapsUrl: row.key,
+          error: row.error ?? "no coordinates in output",
+        });
+      }
+      continue;
     }
 
     // A place saved as bare coordinates has no CID — there is no Google place
@@ -200,7 +227,15 @@ function parse(path: string): {
   const alive = new Set(kept.map((r) => r.cid).filter(Boolean));
   const tombs = [...byDeadCid.values()].filter((t) => !alive.has(t.cid));
 
-  return { rows: kept, skipped, clustered, tombs };
+  // A place that resolved somewhere in this file is not a failure of it, even
+  // if an earlier line for the same URL was one. The resolved answer wins, the
+  // same way it does over a tombstone above.
+  const resolvedUrls = new Set(kept.map((r) => r.mapsUrl));
+  const attempts = [...byFailedUrl.values()].filter(
+    (a) => !resolvedUrls.has(a.mapsUrl),
+  );
+
+  return { rows: kept, skipped, clustered, tombs, attempts };
 }
 
 async function main() {
@@ -212,13 +247,16 @@ async function main() {
     process.exit(1);
   }
 
-  const { rows, skipped, clustered, tombs } = parse(resolve(path));
+  const { rows, skipped, clustered, tombs, attempts } = parse(resolve(path));
   console.log(`${rows.length} resolved coordinates in ${path}`);
   if (tombs.length > 0) {
     console.log(`${tombs.length} ids Google no longer has — will be tombstoned`);
   }
   if (skipped > 0) {
-    console.log(`${skipped} skipped: no place behind the URL`);
+    console.log(
+      `${skipped} could not be read — counted as an attempt, and given up on ` +
+        `at ${MAX_RESOLVE_ATTEMPTS}`,
+    );
   }
   for (const [at, count] of clustered) {
     console.log(
@@ -228,8 +266,9 @@ async function main() {
   }
   // A run that resolved nothing still has something to record if it found ids
   // that are gone — which is precisely the shape of a re-run over a queue full
-  // of dead ids.
-  if (rows.length === 0 && tombs.length === 0) return;
+  // of dead ids — or if it merely failed, which is how a row eventually stops
+  // being retried.
+  if (rows.length === 0 && tombs.length === 0 && attempts.length === 0) return;
 
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -324,6 +363,30 @@ async function main() {
     const shut = rows.filter((r) => r.closed !== null).length;
     if (shut > 0) {
       console.log(`${shut} places have closed`);
+    }
+
+    if (attempts.length > 0) {
+      const waiting = await db
+        .select({ mapsUrl: placeQueue.mapsUrl, attempts: placeQueue.attempts })
+        .from(placeQueue)
+        .where(
+          and(
+            eq(placeQueue.status, "pending"),
+            inArray(
+              placeQueue.mapsUrl,
+              attempts.map((a) => a.mapsUrl),
+            ),
+          ),
+        );
+      const wouldStop = waiting.filter(
+        (r) => r.attempts + 1 >= MAX_RESOLVE_ATTEMPTS,
+      ).length;
+      console.log(
+        `\n${waiting.length} queue entries would take another failed attempt` +
+          (wouldStop > 0
+            ? `, ${wouldStop} of them reaching ${MAX_RESOLVE_ATTEMPTS} and giving up`
+            : ""),
+      );
     }
 
     if (!apply) {
@@ -519,6 +582,53 @@ async function main() {
       );
       if (dropped > 0) {
         console.log(`removed ${dropped} queue entries the tombstones replace`);
+      }
+    }
+
+    // Count the runs that came away with nothing, and stop the rows that have
+    // had enough of them.
+    //
+    // Done last, and only against rows still `pending`, so nothing here can
+    // undo the two steps above: a place these lines failed on but that resolved
+    // elsewhere in the file is already `done`, and one whose id turned out to
+    // be dead has already been deleted.
+    //
+    // One statement per row rather than a batch, because the error text differs
+    // per row and it is the point — a count alone cannot tell a dead end from a
+    // bad evening. There are only ever as many of these as a run failed on.
+    if (attempts.length > 0) {
+      let counted = 0;
+      let stopped = 0;
+      for (const attempt of attempts) {
+        const [updated] = await db
+          .update(placeQueue)
+          .set({
+            attempts: sql`${placeQueue.attempts} + 1`,
+            lastError: attempt.error.slice(0, 500),
+            status: sql`case when ${placeQueue.attempts} + 1 >= ${MAX_RESOLVE_ATTEMPTS}
+                             then 'failed' else 'pending' end`,
+            handledAt: sql`case when ${placeQueue.attempts} + 1 >= ${MAX_RESOLVE_ATTEMPTS}
+                                then ${Date.now()} else ${placeQueue.handledAt} end`,
+          })
+          .where(
+            and(
+              eq(placeQueue.mapsUrl, attempt.mapsUrl),
+              eq(placeQueue.status, "pending"),
+            ),
+          )
+          .returning({ status: placeQueue.status });
+        if (!updated) continue;
+        counted += 1;
+        if (updated.status === "failed") stopped += 1;
+      }
+      if (counted > 0) {
+        console.log(`recorded a failed attempt against ${counted} queue entries`);
+      }
+      if (stopped > 0) {
+        console.log(
+          `${stopped} reached ${MAX_RESOLVE_ATTEMPTS} attempts and stopped — ` +
+            `reopen them with: npx tsx scripts/dump-queue.ts --retry-failed`,
+        );
       }
     }
   } finally {

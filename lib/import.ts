@@ -197,6 +197,21 @@ export async function enqueuePlaces(
   return added;
 }
 
+// How many resolve runs may come away with nothing before a queue row stops
+// being retried.
+//
+// Three rather than one, because the failures this counts are the transient
+// kind: a consent wall, a slow page, a browser that died. Retrying is the whole
+// point of leaving such a row pending. Three rather than ten, because a run is
+// slow and deliberate — a row that has failed three separate runs is not going
+// to come good on the fourth by luck, and a queue that never converges is one
+// nobody can read.
+//
+// Crossing it is not a verdict on the place. A `failed` row is reopened by
+// `dump-queue.ts --retry-failed`, which is a deliberate act, and the count that
+// sent it there is reset then.
+export const MAX_RESOLVE_ATTEMPTS = 3;
+
 // How much work is waiting to have real coordinates read for it.
 export interface QueueSummary {
   pending: number;
@@ -208,6 +223,11 @@ export interface QueueSummary {
   // When the longest-waiting entry was queued, so a queue nobody is draining
   // says so rather than looking merely busy.
   oldestAt: number | null;
+  // Rows that gave up after `MAX_RESOLVE_ATTEMPTS` runs. Counted separately
+  // because they are the opposite of the number above: not work waiting, but
+  // work abandoned — and abandoned silently, since nothing dumps them again.
+  // Invisible failure is the thing this queue was built to avoid.
+  failed: number;
 }
 
 // Count what is on the resolve queue.
@@ -225,11 +245,17 @@ export async function queueSummary(db: Db): Promise<QueueSummary> {
     .where(eq(placeQueue.status, "pending"))
     .groupBy(placeQueue.reason);
 
+  const [gaveUp] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(placeQueue)
+    .where(eq(placeQueue.status, "failed"));
+
   const summary: QueueSummary = {
     pending: 0,
     flagged: 0,
     fromImport: 0,
     oldestAt: null,
+    failed: gaveUp?.count ?? 0,
   };
   for (const row of rows) {
     summary.pending += row.count;
