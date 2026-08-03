@@ -4,6 +4,7 @@ import {
   boolean,
   doublePrecision,
   index,
+  integer,
   pgTable,
   text,
   unique,
@@ -202,13 +203,31 @@ export const placeQueue = pgTable(
     note: text("note"),
     // pending   — waiting for a resolve run
     // done      — resolved; place_coords now has it
-    // failed    — a run tried and could not resolve it
+    // failed    — tried `MAX_RESOLVE_ATTEMPTS` times and never read a position
     // dismissed — closed by hand without resolving
+    //
+    // `failed` says nothing about the place. It means the page could not be
+    // read — a consent wall, a slow load, a browser that crashed — which is a
+    // fact about the runs, not about the world. An id Google has dropped is a
+    // different thing entirely: that goes to `tombstone_cid`, and its queue row
+    // is deleted rather than closed, because the tombstone is then the record.
     status: text("status", {
       enum: ["pending", "done", "failed", "dismissed"],
     })
       .notNull()
       .default("pending"),
+    // How many resolve runs have opened this and come away with nothing.
+    //
+    // Without a count, "worth retrying" and "retried nine times and always
+    // fails" are the same row, and a queue that cannot converge looks exactly
+    // like a queue nobody has got to yet. It is what turns `failed` from a
+    // guess into a decision.
+    attempts: integer("attempts").notNull().default(0),
+    // What went wrong the last time, in the scraper's own words. Kept because
+    // the count says a row gave up and this says whether to believe it: "no
+    // coordinates in settled URL" repeated three times is a real dead end,
+    // three timeouts on the same evening are a bad network.
+    lastError: text("last_error"),
     createdAt: bigint("created_at", { mode: "number" })
       .notNull()
       .default(nowMillis),

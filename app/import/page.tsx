@@ -103,6 +103,28 @@ export default async function ImportPage() {
           </div>
         )}
 
+        {/* Work the queue has stopped retrying. Shown separately from the
+            waiting count, and shown even when nothing is waiting: a row that
+            gave up is not dumped by any later run, so without this it is
+            invisible — which is the one thing a queue must never be. */}
+        {queue.failed > 0 && (
+          <div className="mt-4 rounded-lg border border-stone-300 bg-stone-50 px-4 py-3">
+            <p className="text-sm font-medium text-stone-800">
+              {queue.failed} place{queue.failed === 1 ? "" : "s"} gave up after
+              repeated attempts
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-stone-600">
+              Their map pages could not be read — a consent wall, a slow load, a
+              browser that died — which says nothing about the places
+              themselves. Nothing will retry them on its own. Reopen them with{" "}
+              <code className="rounded bg-stone-200 px-1 py-0.5 text-[11px]">
+                npx tsx scripts/dump-queue.ts --retry-failed
+              </code>
+              .
+            </p>
+          </div>
+        )}
+
         <p className="mt-6 rounded-lg bg-neutral-100 px-4 py-3 text-sm text-neutral-600">
           A nightly Drive sync also imports the newest Takeout zip
           automatically, so manual uploads are only needed when you want an
