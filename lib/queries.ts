@@ -55,15 +55,29 @@ function placeRowQuery(db: Db) {
       category: sql<
         string | null
       >`coalesce(${placeCoords.category}, ${placeCache.category})`,
+      // A saved shopping item or film has no position, whatever the cache says
+      // about the URL it was saved under. Suppressed here rather than repaired
+      // in the cache, because the cache row may be shared with entries this is
+      // not true of, and because the flag is recomputed every import while a
+      // repaired cache row would have to be kept right forever.
+      //
+      // This is what stops a text search that once matched "BMW Z4 front
+      // bumper" to a real body shop from putting a pin on it.
       lat: sql<
         number | null
-      >`coalesce(${placeCoords.lat}, ${placeCache.lat})`,
+      >`case when ${places.notAPlace} then null
+             else coalesce(${placeCoords.lat}, ${placeCache.lat}) end`,
       lng: sql<
         number | null
-      >`coalesce(${placeCoords.lng}, ${placeCache.lng})`,
-      resolver: sql<
-        string | null
-      >`case when ${placeCoords.lat} is not null then 'coords' else ${placeCache.resolver} end`,
+      >`case when ${places.notAPlace} then null
+             else coalesce(${placeCoords.lng}, ${placeCache.lng}) end`,
+      // Why the coordinates above are what they are. `not_a_place` wins over
+      // everything: it is the reason there is no position, and the UI reads it
+      // to say so — and to withhold a Report button from a saved shirt.
+      resolver: sql<string | null>`case
+        when ${places.notAPlace} then 'not_a_place'
+        when ${placeCoords.lat} is not null then 'coords'
+        else ${placeCache.resolver} end`,
       // Nothing about a closed listing looks different otherwise, so this is
       // the only way it reaches the page at all.
       closed: placeCoords.closed,
@@ -78,7 +92,13 @@ function placeRowQuery(db: Db) {
 
 // True where a place has no position from either source. Written once because
 // the unlocated list and its count have to agree on what "unlocated" means.
-const hasNoPosition = sql`coalesce(${placeCoords.lat}, ${placeCache.lat}) is null`;
+//
+// A non-place is unlocated by definition, however confidently a cached search
+// answered for its URL. Kept in step with the `lat` column above: if these two
+// disagreed, a place would be on the map and in the "No coordinates" list at
+// once, or in neither.
+const hasNoPosition = sql`${places.notAPlace}
+  or coalesce(${placeCoords.lat}, ${placeCache.lat}) is null`;
 
 // Pin these built-in lists to the top, in this order, then the rest
 // alphabetically for a stable left column, and force "Favorite places" to the

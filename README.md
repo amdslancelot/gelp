@@ -30,7 +30,7 @@ Everything lives in one GCP project (create one at <https://console.cloud.google
 ## 2. Getting your Takeout export
 
 1. Go to <https://takeout.google.com>, deselect all, select only **Saved** (your Maps saved lists), and export.
-2. **Manual path:** download the zip and upload it on Gelp's `/import` page.
+2. **Manual path:** download the zip and upload it on Gelp's `/import` page. The upload is a dry run first: `POST /api/import/analyze` reads the zip and reports what importing it would do — how many places are already known exactly, how many are cached (and how many of those were merely a search's guess), how many would go on the resolve queue, how many Google no longer has an entry for, and which stored lists would be **deleted** — without writing anything or spending an API call. The import only runs when you pick a mode on that summary. The zip is uploaded again at that point rather than held server-side, so nothing has to be stored between the two requests.
 3. **Automatic path:** choose "Add to Drive" as the delivery method (or set up a scheduled export every 2 months) targeting the shared Drive folder from step 1.3. The in-cluster CronJob hits `POST /api/cron/import` nightly at 03:30; the app then pulls the newest `takeout*.zip` from that folder and imports it. You can trigger it manually any time:
 
    ```sh

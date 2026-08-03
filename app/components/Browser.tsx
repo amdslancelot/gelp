@@ -428,11 +428,27 @@ export default function Browser({
                         {reason.label}
                       </span>
                     ) : (
-                      p.category && (
-                        <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
-                          {humanizeCategory(p.category)}
-                        </span>
-                      )
+                      <span className="flex shrink-0 items-center gap-1">
+                        {/* This pin was chosen by searching the title, not read
+                            off the place's own map page — so it may be a
+                            different business with a similar name. Said on the
+                            row rather than left to the map, because a pin gives
+                            no sign of how it was found, and this is the row
+                            whose Report button is worth pressing. */}
+                        {p.resolver === "search" && (
+                          <span
+                            title="Position guessed by searching the name — it may be the wrong business."
+                            className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700"
+                          >
+                            Guessed
+                          </span>
+                        )}
+                        {p.category && (
+                          <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">
+                            {humanizeCategory(p.category)}
+                          </span>
+                        )}
+                      </span>
                     )}
                   </div>
                   {p.address && (

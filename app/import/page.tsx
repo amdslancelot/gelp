@@ -32,8 +32,10 @@ export default async function ImportPage() {
         <h1 className="mb-1 text-xl font-semibold">Import saved lists</h1>
         <p className="mb-4 text-sm text-neutral-500">
           Upload the <code className="text-neutral-700">.zip</code> from Google
-          Takeout. Places are enriched once and cached, so re-imports cost
-          nothing.
+          Takeout. It is read and summarised first — how much is already known,
+          what would be looked up, what would be deleted — and imported only
+          once you confirm. Places are enriched once and cached, so re-imports
+          cost nothing.
         </p>
         <div className="mb-6 rounded-lg border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600">
           <p className="font-medium text-neutral-800">
