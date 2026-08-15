@@ -56,6 +56,16 @@ const MapView = dynamic(() => import("./MapView"), {
 // A special filter value meaning "no category filter applied".
 const ALL = "__all__";
 
+// The umbrella for places carrying no category at all. It exists so that every
+// place in a list is reachable from some chip: without it the uncategorised
+// ones are visible only under "All", which is also why "All" used to read a
+// larger number than every other chip added up.
+//
+// A sentinel rather than a real tree entry, because "uncategorised" is the
+// absence of the thing the tree is about — it can never gain leaves, and
+// `tier1Of` must never return it.
+const NONE = "__none__";
+
 // How many rows the middle column draws before it stops and offers the rest on
 // request. The largest list here holds 2788 places, and rendering all of them
 // costs about 1.2 MB of server-rendered HTML that the browser then has to
@@ -185,7 +195,10 @@ export default function Browser({
     const byUmbrella = new Map<string, number>();
     const byCategory = new Map<string, number>();
     for (const p of boundedPlaces) {
-      if (!p.category) continue;
+      if (!p.category) {
+        byUmbrella.set(NONE, (byUmbrella.get(NONE) ?? 0) + 1);
+        continue;
+      }
       const t = tier1Of(p.category);
       byUmbrella.set(t, (byUmbrella.get(t) ?? 0) + 1);
       byCategory.set(p.category, (byCategory.get(p.category) ?? 0) + 1);
@@ -203,12 +216,18 @@ export default function Browser({
   const umbrellas = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of places ?? []) {
-      if (!p.category) continue;
-      const t = tier1Of(p.category);
+      const t = p.category ? tier1Of(p.category) : NONE;
       counts.set(t, (counts.get(t) ?? 0) + 1);
     }
+    // Uncategorised last whatever its size. It is currently the biggest bucket
+    // in most lists, and sorted by count it would take the first chip — putting
+    // the one group that says nothing about a place ahead of every group that
+    // does. It is a way back to those places, not a category.
     return Array.from(counts).sort(
-      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+      (a, b) =>
+        Number(a[0] === NONE) - Number(b[0] === NONE) ||
+        b[1] - a[1] ||
+        a[0].localeCompare(b[0]),
     );
   }, [places]);
 
@@ -235,6 +254,7 @@ export default function Browser({
   const visiblePlaces = useMemo(() => {
     const all = places ?? [];
     if (umbrella === ALL) return all;
+    if (umbrella === NONE) return all.filter((p) => !p.category);
     if (leaf) return all.filter((p) => p.category === leaf);
     return all.filter((p) => p.category && tier1Of(p.category) === umbrella);
   }, [places, umbrella, leaf]);
@@ -242,6 +262,7 @@ export default function Browser({
   // Places shown in the middle column: what's in view, then the category filter.
   const listedPlaces = useMemo(() => {
     if (umbrella === ALL) return boundedPlaces;
+    if (umbrella === NONE) return boundedPlaces.filter((p) => !p.category);
     if (leaf) return boundedPlaces.filter((p) => p.category === leaf);
     return boundedPlaces.filter(
       (p) => p.category && tier1Of(p.category) === umbrella,
@@ -344,7 +365,7 @@ export default function Browser({
             {umbrellas.map(([t]) => (
               <Chip
                 key={t}
-                label={humanizeCategory(t)}
+                label={t === NONE ? "Uncategorized" : humanizeCategory(t)}
                 count={inView.byUmbrella.get(t) ?? 0}
                 active={umbrella === t}
                 onClick={() => selectUmbrella(t)}
