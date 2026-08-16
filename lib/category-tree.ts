@@ -473,6 +473,88 @@ const SUFFIX_RULES: ReadonlyArray<readonly [string, string]> = [
   ["_shop", "store"],
 ];
 
+// The coarse layer above the umbrellas — the sections this file is already
+// written in, made readable by something other than a human eye.
+//
+// 43 umbrellas is not a row anyone scans, and eighteen of them are restaurants:
+// Japanese, Italian, Chinese, Korean, Taiwanese, Mexican and a dozen more, each
+// its own chip. That split is right one level down — nobody who eats them reads
+// Taiwanese and Chinese as one thing — but it is the wrong first question. The
+// first question is "am I looking for food, or a shop, or a view".
+//
+// Cuisine stays where it is. This adds a layer above it rather than folding it
+// away, so the three questions are asked in the order they are actually asked:
+// what kind of outing, then what kind of food, then what dish.
+export const CATEGORY_GROUPS: Record<string, readonly string[]> = {
+  // Eating and drinking are one group, not two. The places overlap — a bakery
+  // with tables, an izakaya that is mostly a bar — and a split would put the
+  // same evening under two chips.
+  food_and_drink: [
+    "japanese_restaurant",
+    "taiwanese_restaurant",
+    "chinese_restaurant",
+    "korean_restaurant",
+    "asian_restaurant",
+    "indian_restaurant",
+    "italian_restaurant",
+    "french_restaurant",
+    "european_restaurant",
+    "mediterranean_restaurant",
+    "middle_eastern_restaurant",
+    "african_restaurant",
+    "american_restaurant",
+    "mexican_restaurant",
+    "latin_american_restaurant",
+    "seafood_restaurant",
+    "vegetarian_restaurant",
+    "restaurant",
+    "cafe",
+    "bakery",
+    "bar",
+  ],
+  shopping: ["clothing_store", "store", "grocery_store", "market"],
+  outdoors: ["park", "natural_feature", "sports"],
+  culture: [
+    "museum",
+    "art_gallery",
+    "landmark",
+    "place_of_worship",
+    "tourist_attraction",
+  ],
+  staying: ["hotel"],
+  // Everything that is somewhere you deal with rather than somewhere you go.
+  // "other" lives here because a group has to hold it and this is the one
+  // nobody browses for pleasure — burying an unplaced category at the end of
+  // it costs less than putting it in front of the ones people do browse.
+  services: [
+    "health",
+    "education",
+    "transport",
+    "service",
+    "business",
+    "civic",
+    "residential",
+    "other",
+  ],
+};
+
+// The order the group chips are drawn in. Deliberately not by count: this row
+// is the one thing on the page that never reshuffles, so an eye that learned
+// where "Shopping" sits keeps finding it in a different list, in a different
+// city, on a different day.
+export const GROUPS = Object.keys(CATEGORY_GROUPS);
+
+const GROUP_OF: ReadonlyMap<string, string> = new Map(
+  Object.entries(CATEGORY_GROUPS).flatMap(([group, tier1s]) =>
+    tier1s.map((t) => [t, group] as [string, string]),
+  ),
+);
+
+/** The group an umbrella sits in. "services" catches anything unassigned. */
+export function groupOf(tier1: string): string {
+  return GROUP_OF.get(tier1) ?? "services";
+}
+
 /** The umbrella a category belongs under. Falls back to a suffix rule, then "other". */
 export function tier1Of(category: string): string {
   const known = PARENT.get(category);

@@ -10,8 +10,12 @@ import {
   type UnlocatedReason,
 } from "@/lib/place-view";
 import type { MapBounds } from "./MapView";
-import { displayListName, humanizeCategory } from "@/lib/humanize";
-import { tier1Of } from "@/lib/category-tree";
+import {
+  displayListName,
+  humanizeCategory,
+  humanizeGroup,
+} from "@/lib/humanize";
+import { GROUPS, groupOf, tier1Of } from "@/lib/category-tree";
 import FlagButton from "./FlagButton";
 import { useMyLocation } from "./use-my-location";
 import { DEFAULT_NEAR_RADIUS_KM } from "@/lib/geo";
@@ -76,6 +80,25 @@ const NONE = "__none__";
 // rendered before the map has reported a viewport, so within a few hundred
 // milliseconds all but a screenful are thrown away again.
 const ROWS_BEFORE_MORE = 100;
+
+// True when a place passes the current three-tier category filter. Written
+// once because the map, the middle column and the chip counts all have to mean
+// the same thing by "filtered" — three copies of this would eventually show a
+// count that no list matched.
+function matchesFilter(
+  p: PlaceView,
+  group: string,
+  umbrella: string | null,
+  leaf: string | null,
+): boolean {
+  if (group === ALL) return true;
+  if (group === NONE) return !p.category;
+  if (!p.category) return false;
+  if (leaf) return p.category === leaf;
+  const t = tier1Of(p.category);
+  if (umbrella) return t === umbrella;
+  return groupOf(t) === group;
+}
 
 // True when a place's coordinates fall inside the map's current viewport. The
 // longitude test tolerates a viewport that straddles the antimeridian (where
@@ -145,10 +168,15 @@ export default function Browser({
   // the whole point of asking for it first.
   const loading = selectedListId !== null && places === undefined && !loadError;
 
-  // The filter is two-tier: an umbrella, then optionally one category under it.
-  // `leaf` is null while the whole umbrella is selected, and is always inside
-  // `umbrella` — picking a new umbrella clears it.
-  const [umbrella, setUmbrella] = useState<string>(ALL);
+  // The filter is three-tier — group, then umbrella, then category — and each
+  // level is null while the whole of the level above it is selected. Narrowing
+  // is always inside what is already chosen, so picking a new group clears the
+  // two below it and picking a new umbrella clears the leaf.
+  //
+  // Three questions in the order they are actually asked: what kind of outing,
+  // then what kind of food, then what dish.
+  const [group, setGroup] = useState<string>(ALL);
+  const [umbrella, setUmbrella] = useState<string | null>(null);
   const [leaf, setLeaf] = useState<string | null>(null);
   const [focus, setFocus] = useState<PlaceView | null>(null);
   // When on, the middle-column list is narrowed to places inside the map's
@@ -249,50 +277,63 @@ export default function Browser({
   // This is what the chips display, so their numbers and the list below them
   // are always the same claim about the same places.
   const inView = useMemo(() => {
+    const byGroup = new Map<string, number>();
     const byUmbrella = new Map<string, number>();
     const byCategory = new Map<string, number>();
     for (const p of boundedPlaces) {
       if (!p.category) {
-        byUmbrella.set(NONE, (byUmbrella.get(NONE) ?? 0) + 1);
+        byGroup.set(NONE, (byGroup.get(NONE) ?? 0) + 1);
         continue;
       }
       const t = tier1Of(p.category);
+      const g = groupOf(t);
+      byGroup.set(g, (byGroup.get(g) ?? 0) + 1);
       byUmbrella.set(t, (byUmbrella.get(t) ?? 0) + 1);
       byCategory.set(p.category, (byCategory.get(p.category) ?? 0) + 1);
     }
-    return { byUmbrella, byCategory };
+    return { byGroup, byUmbrella, byCategory };
   }, [boundedPlaces]);
 
-  // The umbrellas present in the selected list, biggest first. A list of 200
-  // places can carry 60 categories, which is not a row anyone reads; the
-  // umbrella is what makes the first choice small enough to scan.
-  // Which chips exist, and their order, come from the whole list rather than
-  // the viewport: a row that reshuffles under the thumb on every pan can't be
-  // aimed at, and a chip that vanishes takes away the way back to its places.
-  // Only the number on each chip follows the map.
-  const umbrellas = useMemo(() => {
+  // The groups present in the selected list. Drawn in the tree's own order
+  // rather than by count: this is the row that must not reshuffle between one
+  // list and the next, or between one city and the next.
+  const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of places ?? []) {
-      const t = p.category ? tier1Of(p.category) : NONE;
-      counts.set(t, (counts.get(t) ?? 0) + 1);
+      const g = p.category ? groupOf(tier1Of(p.category)) : NONE;
+      counts.set(g, (counts.get(g) ?? 0) + 1);
     }
     // Uncategorised last whatever its size. It is currently the biggest bucket
     // in most lists, and sorted by count it would take the first chip — putting
     // the one group that says nothing about a place ahead of every group that
     // does. It is a way back to those places, not a category.
-    return Array.from(counts).sort(
-      (a, b) =>
-        Number(a[0] === NONE) - Number(b[0] === NONE) ||
-        b[1] - a[1] ||
-        a[0].localeCompare(b[0]),
-    );
+    return [...GROUPS, NONE]
+      .filter((g) => counts.has(g))
+      .map((g) => [g, counts.get(g) ?? 0] as [string, number]);
   }, [places]);
+
+  // The umbrellas inside the chosen group, biggest first — here counting is
+  // right, because the row only exists once a group is chosen and its contents
+  // change with every list anyway.
+  const umbrellas = useMemo(() => {
+    if (group === ALL || group === NONE) return [];
+    const counts = new Map<string, number>();
+    for (const p of places ?? []) {
+      if (!p.category) continue;
+      const t = tier1Of(p.category);
+      if (groupOf(t) !== group) continue;
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return Array.from(counts).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
+  }, [places, group]);
 
   // The categories under the chosen umbrella that this list actually has. One
   // of them means the umbrella is already as narrow as the data goes, so the
   // second row would just repeat the first and is not drawn.
   const leaves = useMemo(() => {
-    if (umbrella === ALL) return [];
+    if (!umbrella) return [];
     const counts = new Map<string, number>();
     for (const p of places ?? []) {
       if (p.category && tier1Of(p.category) === umbrella) {
@@ -310,21 +351,15 @@ export default function Browser({
   // to an ever-smaller set.
   const visiblePlaces = useMemo(() => {
     const all = places ?? [];
-    if (umbrella === ALL) return all;
-    if (umbrella === NONE) return all.filter((p) => !p.category);
-    if (leaf) return all.filter((p) => p.category === leaf);
-    return all.filter((p) => p.category && tier1Of(p.category) === umbrella);
-  }, [places, umbrella, leaf]);
+    if (group === ALL) return all;
+    return all.filter((p) => matchesFilter(p, group, umbrella, leaf));
+  }, [places, group, umbrella, leaf]);
 
   // Places shown in the middle column: what's in view, then the category filter.
   const listedPlaces = useMemo(() => {
-    if (umbrella === ALL) return boundedPlaces;
-    if (umbrella === NONE) return boundedPlaces.filter((p) => !p.category);
-    if (leaf) return boundedPlaces.filter((p) => p.category === leaf);
-    return boundedPlaces.filter(
-      (p) => p.category && tier1Of(p.category) === umbrella,
-    );
-  }, [boundedPlaces, umbrella, leaf]);
+    if (group === ALL) return boundedPlaces;
+    return boundedPlaces.filter((p) => matchesFilter(p, group, umbrella, leaf));
+  }, [boundedPlaces, group, umbrella, leaf]);
 
   // What actually reaches the DOM, and how much was held back.
   const shownPlaces = useMemo(
@@ -333,7 +368,14 @@ export default function Browser({
   );
   const heldBack = listedPlaces.length - shownPlaces.length;
 
-  const selectUmbrella = (t: string) => {
+  const selectGroup = (g: string) => {
+    setGroup(g);
+    setUmbrella(null);
+    setLeaf(null);
+    setShowAllRows(false);
+  };
+
+  const selectUmbrella = (t: string | null) => {
     setUmbrella(t);
     setLeaf(null);
     setShowAllRows(false);
@@ -341,7 +383,7 @@ export default function Browser({
 
   const selectList = (id: string) => {
     setSelectedListId(id);
-    selectUmbrella(ALL);
+    selectGroup(ALL);
     setFocus(null);
     setDrawerOpen(false);
     setShowAllRows(false);
@@ -404,9 +446,11 @@ export default function Browser({
         />
       </aside>
 
-      {/* Filter bar: spans the places-list and map columns above both. Two rows,
-          the second only once an umbrella with more than one category under it
-          is chosen. */}
+      {/* Filter bar: spans the places-list and map columns above both. Up to
+          three rows, each appearing only once the one above it has been
+          narrowed — and the third only when the umbrella actually has more than
+          one category under it, since a row that repeats the chip above it is
+          not a choice. */}
       <div className="border-b border-neutral-200 bg-white md:col-span-2">
         <div className="flex items-center px-4 py-2.5">
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto whitespace-nowrap">
@@ -419,13 +463,13 @@ export default function Browser({
               active={umbrella === ALL}
               onClick={() => selectUmbrella(ALL)}
             />
-            {umbrellas.map(([t]) => (
+            {groups.map(([g]) => (
               <Chip
-                key={t}
-                label={t === NONE ? "Uncategorized" : humanizeCategory(t)}
-                count={inView.byUmbrella.get(t) ?? 0}
-                active={umbrella === t}
-                onClick={() => selectUmbrella(t)}
+                key={g}
+                label={g === NONE ? "Uncategorized" : humanizeGroup(g)}
+                count={inView.byGroup.get(g) ?? 0}
+                active={group === g}
+                onClick={() => selectGroup(g)}
               />
             ))}
           </div>
@@ -445,8 +489,27 @@ export default function Browser({
             In map view
           </button>
         </div>
-        {leaves.length > 1 && (
+        {umbrellas.length > 1 && (
           <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-t border-neutral-100 bg-neutral-50 px-4 py-2">
+            <Chip
+              label={`All ${humanizeGroup(group)}`}
+              count={inView.byGroup.get(group) ?? 0}
+              active={umbrella === null}
+              onClick={() => selectUmbrella(null)}
+            />
+            {umbrellas.map(([t]) => (
+              <Chip
+                key={t}
+                label={humanizeCategory(t)}
+                count={inView.byUmbrella.get(t) ?? 0}
+                active={umbrella === t}
+                onClick={() => selectUmbrella(t)}
+              />
+            ))}
+          </div>
+        )}
+        {umbrella && leaves.length > 1 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap border-t border-neutral-100 bg-neutral-100 px-4 py-2">
             <Chip
               label={`All ${humanizeCategory(umbrella)}`}
               count={inView.byUmbrella.get(umbrella) ?? 0}
@@ -614,7 +677,7 @@ export default function Browser({
           focus={focus}
           onBoundsChange={handleBoundsChange}
           location={location}
-          frameKey={`${selectedListId ?? ""}|${umbrella}|${leaf ?? ""}`}
+          frameKey={`${selectedListId ?? ""}|${group}|${umbrella ?? ""}|${leaf ?? ""}`}
         />
       </section>
 

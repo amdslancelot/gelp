@@ -37,7 +37,14 @@ import {
   revokeShare,
   rotateShare,
 } from "../lib/share";
-import { CATEGORY_TREE, TIER1, isPlaced, tier1Of } from "../lib/category-tree";
+import {
+  CATEGORY_GROUPS,
+  CATEGORY_TREE,
+  TIER1,
+  groupOf,
+  isPlaced,
+  tier1Of,
+} from "../lib/category-tree";
 
 // A tiny assertion helper that records failures rather than throwing, so the
 // script can print a complete summary before exiting.
@@ -1147,6 +1154,36 @@ async function main() {
       "an unknown category falls back by suffix and is reported as unplaced",
     );
     assert(tier1Of("shed_thing") === "other", "an unrecognisable category lands in other");
+
+    // The group layer is the same hand-written data one level up, and has the
+    // same failure: an umbrella nobody assigned silently lands in Services,
+    // where a restaurant would be filed next to the dentist.
+    const grouped = new Set(Object.values(CATEGORY_GROUPS).flat());
+    const ungrouped = TIER1.filter((t) => !grouped.has(t));
+    assert(
+      ungrouped.length === 0,
+      `every umbrella sits in a group${ungrouped.length ? `, got ${ungrouped.join(", ")}` : ""}`,
+    );
+    const notAnUmbrella = [...grouped].filter((t) => !TIER1.includes(t));
+    assert(
+      notAnUmbrella.length === 0,
+      `every grouped name is a real umbrella${notAnUmbrella.length ? `, got ${notAnUmbrella.join(", ")}` : ""}`,
+    );
+    const twoGroups = new Map<string, string[]>();
+    for (const [group, tier1s] of Object.entries(CATEGORY_GROUPS)) {
+      for (const t of tier1s) {
+        twoGroups.set(t, [...(twoGroups.get(t) ?? []), group]);
+      }
+    }
+    const inTwo = [...twoGroups].filter(([, gs]) => gs.length > 1);
+    assert(
+      inTwo.length === 0,
+      `no umbrella sits in two groups${inTwo.length ? `, got ${inTwo.map(([t, gs]) => `${t}→${gs.join("/")}`).join(", ")}` : ""}`,
+    );
+    assert(
+      groupOf(tier1Of("okonomiyaki_restaurant")) === "food_and_drink",
+      "a category Google invents still reaches a group people browse",
+    );
   } finally {
     // 9. Tear down the throwaway database.
     await pool.end();
