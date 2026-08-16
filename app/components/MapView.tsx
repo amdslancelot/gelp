@@ -17,6 +17,7 @@ import "leaflet/dist/leaflet.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css";
 import type { PlaceView } from "@/lib/queries";
+import type { MyLocation } from "./use-my-location";
 
 // The map's current viewport, reported to the parent as plain numbers so the
 // list can be filtered to what's on screen without leaking Leaflet types out.
@@ -48,22 +49,15 @@ interface MapViewProps {
   // Called whenever the viewport settles (pan/zoom end), so the parent can
   // narrow the list to places within view. Optional.
   onBoundsChange?: (bounds: MapBounds) => void;
-}
-
-// Turn a raw GeolocationPositionError into an actionable message. The default
-// browser strings (e.g. "Position update is unavailable") don't tell the user
-// what to do about it.
-function friendlyGeoError(err: GeolocationPositionError): string {
-  switch (err.code) {
-    case err.PERMISSION_DENIED:
-      return "Permission denied — allow location access for this site in your browser.";
-    case err.POSITION_UNAVAILABLE:
-      return "Your device couldn't determine its location. On macOS, enable System Settings → Privacy & Security → Location Services (and turn Wi-Fi on), then retry.";
-    case err.TIMEOUT:
-      return "Timed out getting your location — try again.";
-    default:
-      return err.message;
-  }
+  // What the current framing is *for* — the list and category filter being
+  // shown. The map re-frames when this changes and not merely when `places`
+  // does, because places also changes when the rest of a list arrives behind
+  // the near-me set, and re-fitting there would yank the map from the street
+  // the user is standing on out to the whole world.
+  frameKey: string;
+  // Where the user is. Owned by the parent because the first fetch is aimed at
+  // it — see `use-my-location`.
+  location: MyLocation;
 }
 
 // The saved Takeout URL is the real Google Maps pin; fall back to a
@@ -87,15 +81,27 @@ function MapController({
   places,
   focus,
   visible,
-}: MapViewProps & { visible: boolean }) {
+  frameKey,
+}: {
+  places: PlaceView[];
+  focus: PlaceView | null;
+  visible: boolean;
+  frameKey: string;
+}) {
   const map = useMap();
   // What the map was last framed for. A pane being revealed is not a reason to
   // re-frame — that would throw away the pan the user made before they left it.
   // Only a change of places or focus is, so a reveal re-frames exactly when the
   // change arrived while the pane was hidden and could not be acted on.
-  const framedFor = useRef<{ places: PlaceView[]; focus: PlaceView | null }>(
-    null,
-  );
+  const framedFor = useRef<{
+    frameKey: string;
+    focus: PlaceView | null;
+    // How many places that framing had to work with. Zero means it framed
+    // nothing at all — the user is nowhere near this list, and the near-me
+    // fetch came back empty — so the arrival of the rest is the first real
+    // chance to frame and must be taken.
+    count: number;
+  }>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -103,12 +109,13 @@ function MapController({
     // the size it had while hidden.
     map.invalidateSize();
     if (
-      framedFor.current?.places === places &&
-      framedFor.current?.focus === focus
+      framedFor.current?.frameKey === frameKey &&
+      framedFor.current?.focus === focus &&
+      framedFor.current.count > 0
     ) {
       return;
     }
-    framedFor.current = { places, focus };
+    framedFor.current = { frameKey, focus, count: places.length };
     if (focus && Number.isFinite(focus.lat) && Number.isFinite(focus.lng)) {
       map.flyTo([focus.lat as number, focus.lng as number], 16, {
         duration: 0.6,
@@ -123,7 +130,7 @@ function MapController({
       withCoords.map((p) => [p.lat as number, p.lng as number]),
     );
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
-  }, [map, places, focus, visible]);
+  }, [map, places, focus, visible, frameKey]);
 
   return null;
 }
@@ -281,62 +288,19 @@ export default function MapView({
   places,
   focus,
   onBoundsChange,
+  location,
+  frameKey,
 }: MapViewProps) {
-  const [myPos, setMyPos] = useState<[number, number] | null>(null);
-  const [flyTick, setFlyTick] = useState(0);
-  const [geoError, setGeoError] = useState<string | null>(null);
+  const {
+    pos: myPos,
+    error: geoError,
+    locate: locateMe,
+    flyTick,
+    overridden,
+  } = location;
   // Whether the map's pane currently occupies space. False while the mobile
   // List tab is showing, which is also the state the map is born in.
   const [visible, setVisible] = useState(false);
-
-  // Passively track location so the dot appears (and stays fresh) as soon as
-  // permission is granted, without moving the map. Coarse accuracy is enough
-  // for a "you are here" dot and succeeds more often on desktops than the
-  // high-accuracy (GPS) provider. Errors here are silent — we don't nag before
-  // the user asks; the button below surfaces them.
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) return;
-    const watchId = navigator.geolocation.watchPosition(
-      (p) => {
-        setMyPos([p.coords.latitude, p.coords.longitude]);
-        setGeoError(null);
-      },
-      () => {},
-      { enableHighAccuracy: false, maximumAge: 30_000 },
-    );
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, []);
-
-  // Explicit user gesture: request the position and fly the map to it. A gesture
-  // also makes the browser permission prompt more reliable than an on-load one.
-  const locateMe = useCallback(() => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setGeoError("Geolocation is not supported by this browser.");
-      return;
-    }
-    setGeoError(null);
-
-    const onOk = (p: GeolocationPosition) => {
-      setMyPos([p.coords.latitude, p.coords.longitude]);
-      setGeoError(null);
-      setFlyTick((t) => t + 1);
-    };
-
-    // Try precise (GPS) first, then fall back to coarse (network/Wi-Fi), which
-    // frequently succeeds on desktops where the high-accuracy provider reports
-    // POSITION_UNAVAILABLE.
-    navigator.geolocation.getCurrentPosition(
-      onOk,
-      () => {
-        navigator.geolocation.getCurrentPosition(
-          onOk,
-          (err) => setGeoError(friendlyGeoError(err)),
-          { enableHighAccuracy: false, timeout: 10_000, maximumAge: 60_000 },
-        );
-      },
-      { enableHighAccuracy: true, timeout: 8_000 },
-    );
-  }, []);
 
   return (
     <div className="relative h-full w-full">
@@ -362,10 +326,15 @@ export default function MapView({
               fillOpacity: 1,
             }}
           >
-            <Popup>You are here</Popup>
+            <Popup>{overridden ? "Showing places near here" : "You are here"}</Popup>
           </CircleMarker>
         )}
-        <MapController places={places} focus={focus} visible={visible} />
+        <MapController
+          places={places}
+          focus={focus}
+          visible={visible}
+          frameKey={frameKey}
+        />
         <FlyToLocation pos={myPos} tick={flyTick} />
         <BoundsReporter onBoundsChange={onBoundsChange} />
         <InvalidateOnResize onVisibilityChange={setVisible} />
@@ -376,7 +345,10 @@ export default function MapView({
         onClick={locateMe}
         className="absolute right-3 top-3 z-[1000] rounded-md bg-white px-3 py-2 text-sm font-medium text-gray-800 shadow-md ring-1 ring-black/10 hover:bg-gray-50"
       >
-        📍 My location
+        {/* Named plainly when it is not actually where the user is: the map is
+            centred on a point from the URL, and calling that "my location"
+            would be the one thing on screen that lies. */}
+        📍 {overridden ? "Pinned point" : "My location"}
       </button>
 
       {geoError && (

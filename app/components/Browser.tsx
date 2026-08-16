@@ -13,6 +13,9 @@ import type { MapBounds } from "./MapView";
 import { displayListName, humanizeCategory } from "@/lib/humanize";
 import { tier1Of } from "@/lib/category-tree";
 import FlagButton from "./FlagButton";
+import { useMyLocation } from "./use-my-location";
+import { DEFAULT_NEAR_RADIUS_KM } from "@/lib/geo";
+import { radiusFromUrl } from "./use-my-location";
 
 // What each reason for having no position looks like, and whether the user can
 // do anything about it. Only "missing" is actionable: the rest are either
@@ -90,12 +93,16 @@ function inBounds(p: PlaceView, b: MapBounds): boolean {
 export default function Browser({
   lists,
   initialPlaces,
+  initialListId,
   placesUrl,
 }: {
   lists: ListSummary[];
-  // The places of the list that opens first, rendered with the page so the
-  // first screen costs no round trip.
+  // The places the page server-rendered, so the first screen costs no round
+  // trip — and which list they belong to, or null when the page chose to
+  // render none. "All Places" is that case: it is the whole account, and
+  // serialising it into the HTML is the cost the split load exists to avoid.
   initialPlaces: PlaceView[];
+  initialListId: string | null;
   // Where to fetch another list's places, with `{id}` standing in for the list.
   // A template rather than a fixed path because a shared map reads through a
   // token-authorised route rather than the session one.
@@ -105,17 +112,37 @@ export default function Browser({
   const [selectedListId, setSelectedListId] = useState<string | null>(
     firstListId,
   );
+  // Asked for on mount, because it decides what the first fetch asks for — not
+  // just where the map is pointed.
+  const location = useMyLocation();
+
   // Places are kept per list, so going back to one already opened is instant
   // and costs no second request.
-  const [placesByList, setPlacesByList] = useState<Record<string, PlaceView[]>>(
-    () => (firstListId ? { [firstListId]: initialPlaces } : {}),
+  //
+  // `complete` is false while a list is showing only the places near the user.
+  // That set arrives in tens of kilobytes and is drawn immediately; the rest is
+  // fetched behind it and replaces this entry. Kept as a flag rather than
+  // inferred from the count, because "near me returned everything" and "this is
+  // everything" look identical from the outside and only one of them means the
+  // second fetch can be skipped.
+  const [placesByList, setPlacesByList] = useState<
+    Record<string, { places: PlaceView[]; complete: boolean }>
+  >(() =>
+    initialListId
+      ? { [initialListId]: { places: initialPlaces, complete: true } }
+      : {},
   );
   const [loadError, setLoadError] = useState<string | null>(null);
   // Bumped by Retry, so a failed load can be asked for again without changing
   // anything else the fetch depends on.
   const [reloadTick, setReloadTick] = useState(0);
 
-  const places = selectedListId ? placesByList[selectedListId] : undefined;
+  const places = selectedListId
+    ? placesByList[selectedListId]?.places
+    : undefined;
+  // The near-me set counts as loaded: it is a real, complete answer about the
+  // area the user is in, and holding the screen back for the rest would give up
+  // the whole point of asking for it first.
   const loading = selectedListId !== null && places === undefined && !loadError;
 
   // The filter is two-tier: an umbrella, then optionally one category under it.
@@ -142,31 +169,61 @@ export default function Browser({
   // and the request was about the old one.
   const [showAllRows, setShowAllRows] = useState(false);
 
-  // Fetch the selected list's places the first time it is opened. Everything
-  // else on the page reads `places`, so this is the only thing that knows the
-  // places arrive separately from the list they belong to.
+  // Fetch the selected list's places, near-me first. Everything else on the
+  // page reads `places`, so this is the only thing that knows they arrive
+  // separately from the list they belong to — and now, in two parts.
+  //
+  // The two phases are one effect rather than two because they are one
+  // sequence: what to ask for next is decided by what is already in hand.
+  const entry = selectedListId ? placesByList[selectedListId] : undefined;
+  const phase = !entry ? "near" : entry.complete ? null : "rest";
   useEffect(() => {
-    if (!selectedListId || placesByList[selectedListId]) return;
+    if (!selectedListId || phase === null) return;
+    // Nothing is fetched until the location question has an answer. Firing the
+    // unaimed request first and the aimed one after would download the whole
+    // account anyway, which is the cost this exists to avoid.
+    if (phase === "near" && !location.settled) return;
+
+    const near =
+      phase === "near" && location.pos
+        ? `near=${location.pos[0].toFixed(5)},${location.pos[1].toFixed(5)}` +
+          `&radius=${radiusFromUrl() ?? DEFAULT_NEAR_RADIUS_KM}`
+        : null;
+    // No position, or this is the second pass: ask for the whole list.
+    const complete = near === null;
+
     const controller = new AbortController();
     setLoadError(null);
-    fetch(placesUrl.replace("{id}", encodeURIComponent(selectedListId)), {
-      signal: controller.signal,
-    })
+    const base = placesUrl.replace("{id}", encodeURIComponent(selectedListId));
+    const url = near ? `${base}${base.includes("?") ? "&" : "?"}${near}` : base;
+
+    fetch(url, { signal: controller.signal })
       .then((r) =>
         r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)),
       )
       .then((body: { places: PlaceView[] }) =>
         setPlacesByList((byList) => ({
           ...byList,
-          [selectedListId]: body.places,
+          [selectedListId]: { places: body.places, complete },
         })),
       )
       .catch((err: Error) => {
         // An abort is this component moving on, not a failure to report.
-        if (err.name !== "AbortError") setLoadError("Couldn't load this list.");
+        if (err.name === "AbortError") return;
+        // A failed background fill is not worth an error banner over a map the
+        // user is already reading: the places nearby are on screen and correct.
+        // The first fetch failing means an empty screen, and that is reported.
+        if (phase === "near") setLoadError("Couldn't load this list.");
       });
     return () => controller.abort();
-  }, [selectedListId, placesByList, placesUrl, reloadTick]);
+  }, [
+    selectedListId,
+    phase,
+    location.settled,
+    location.pos,
+    placesUrl,
+    reloadTick,
+  ]);
 
   const selectedList = useMemo(
     () => lists.find((l) => l.id === selectedListId) ?? null,
@@ -556,6 +613,8 @@ export default function Browser({
           places={visiblePlaces}
           focus={focus}
           onBoundsChange={handleBoundsChange}
+          location={location}
+          frameKey={`${selectedListId ?? ""}|${umbrella}|${leaf ?? ""}`}
         />
       </section>
 

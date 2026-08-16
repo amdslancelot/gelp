@@ -7,9 +7,12 @@ import {
   placeQueue,
   places,
 } from "./db/schema";
+import { nearBox, type NearFilter } from "./geo";
 import { resolveShare } from "./share";
 import { queueSummary, type QueueSummary } from "./import";
 import {
+  ALL_PLACES_LIST_ID,
+  ALL_PLACES_LIST_NAME,
   UNLOCATED_LIST_ID,
   UNLOCATED_LIST_NAME,
   type ListSummary,
@@ -22,6 +25,8 @@ import {
 export type { QueueSummary } from "./import";
 export type { PlaceView, ListSummary } from "./place-view";
 export {
+  ALL_PLACES_LIST_ID,
+  ALL_PLACES_LIST_NAME,
   UNLOCATED_LIST_ID,
   UNLOCATED_LIST_NAME,
   unlocatedReason,
@@ -100,6 +105,39 @@ function placeRowQuery(db: Db) {
 const hasNoPosition = sql`${places.notAPlace}
   or coalesce(${placeCoords.lat}, ${placeCache.lat}) is null`;
 
+// Its exact complement, written as a negation of the same expression rather
+// than spelled out again: "All Places" and "No coordinates" partition the
+// account, and two hand-written conditions would eventually disagree about a
+// place and put it in both or neither. `not_a_place` is NOT NULL, so this
+// cannot go three-valued.
+const hasPosition = sql`not (${hasNoPosition})`;
+
+// The position a place is filtered on: the same coalesce the `lat`/`lng`
+// columns use, so a place is inside the "near me" box exactly when the pin the
+// user would see is. `not_a_place` is not tested here — it has no position, so
+// it fails the null test below on its own.
+const posLat = sql`coalesce(${placeCoords.lat}, ${placeCache.lat})`;
+const posLng = sql`coalesce(${placeCoords.lng}, ${placeCache.lng})`;
+
+// Restrict to a box around the user. Returns undefined for no filter, so it can
+// be dropped into an `and(...)` unconditionally.
+//
+// A viewport straddling the antimeridian is written as two ranges rather than
+// one, because there the box's west edge is a larger number than its east one
+// and a plain BETWEEN matches nothing — which would show a user in Fiji an
+// empty map and no reason for it.
+function withinNear(near: NearFilter | undefined) {
+  if (!near) return undefined;
+  const { minLat, maxLat, minLng, maxLng } = nearBox(near);
+  const lngTest =
+    minLng < -180 || maxLng > 180
+      ? // Normalised into [-180, 180] and tested as a union of the two halves.
+        sql`(${posLng} >= ${((minLng + 540) % 360) - 180}
+             or ${posLng} <= ${((maxLng + 540) % 360) - 180})`
+      : sql`${posLng} between ${minLng} and ${maxLng}`;
+  return sql`${posLat} between ${minLat} and ${maxLat} and ${lngTest}`;
+}
+
 // Pin these built-in lists to the top, in this order, then the rest
 // alphabetically for a stable left column, and force "Favorite places" to the
 // very bottom. "Saved Places" is the starred-places list (shown as "Starred
@@ -137,6 +175,31 @@ export async function loadListSummaries(
   const summaries = rows.sort(
     (a, b) => listRank(a.name) - listRank(b.name) || a.name.localeCompare(b.name),
   );
+
+  // Every placed place in the account, gathered above the real lists. Google's
+  // export splits the same place across "Want to go", "Favorites" and whatever
+  // else it was saved to, so there was no single view of the map until this —
+  // opening each list in turn was the only way to see all of the pins.
+  //
+  // Deduped by the same key the list itself uses, so the count in the sidebar
+  // and the number of rows in the column agree.
+  const [{ count: allCount }] = await db
+    .select({
+      count: sql<number>`count(distinct coalesce(${places.mapsUrl}, ${places.id}))::int`,
+    })
+    .from(places)
+    .leftJoin(placeCache, eq(places.cacheKey, placeCache.key))
+    .leftJoin(placeCoords, eq(places.cid, placeCoords.cid))
+    .innerJoin(lists, eq(places.listId, lists.id))
+    .where(and(eq(lists.userId, userId), eq(lists.hidden, false), hasPosition));
+
+  if (allCount > 0) {
+    summaries.unshift({
+      id: ALL_PLACES_LIST_ID,
+      name: ALL_PLACES_LIST_NAME,
+      count: allCount,
+    });
+  }
 
   // A place with no coordinates is on no map, and a place on no map is one the
   // user never sees — so it can never be reported as wrong, and would sit
@@ -176,7 +239,11 @@ async function listPlaces(
   db: Db,
   userId: string,
   listId: string,
+  near?: NearFilter,
 ): Promise<PlaceView[]> {
+  if (listId === ALL_PLACES_LIST_ID) return everyPlace(db, userId, near);
+  // The unlocated list ignores `near`: nothing in it has a position, so any box
+  // would empty it. It is also small, which is why it never needed one.
   if (listId === UNLOCATED_LIST_ID) return unlocatedPlaces(db, userId);
 
   const owned = await db
@@ -192,8 +259,43 @@ async function listPlaces(
     .limit(1);
   if (owned.length === 0) return [];
 
-  const rows = await placeRowQuery(db).where(eq(places.listId, listId));
+  const rows = await placeRowQuery(db).where(
+    and(eq(places.listId, listId), withinNear(near)),
+  );
   return rows.map((r) => ({ ...r, queued: r.queued ?? false }));
+}
+
+// The built-in list of everything that is on the map, assembled across all of
+// the user's non-hidden lists.
+//
+// This is the largest query the app runs, and the only one that can return the
+// whole account at once — which is why the page does not server-render it (see
+// `app/page.tsx`): it arrives through the same fetch every other list uses.
+async function everyPlace(
+  db: Db,
+  userId: string,
+  near?: NearFilter,
+): Promise<PlaceView[]> {
+  const rows = await placeRowQuery(db)
+    .innerJoin(lists, eq(places.listId, lists.id))
+    .where(
+      and(
+        eq(lists.userId, userId),
+        eq(lists.hidden, false),
+        hasPosition,
+        withinNear(near),
+      ),
+    );
+
+  const seen = new Map<string, PlaceView>();
+  for (const row of rows) {
+    const place = { ...row, queued: row.queued ?? false };
+    // The same place saved to three lists is one pin, not three stacked on the
+    // same spot. Same key as the unlocated list, for the same reason.
+    const key = place.mapsUrl ?? place.id;
+    if (!seen.has(key)) seen.set(key, place);
+  }
+  return [...seen.values()].sort((a, b) => a.title.localeCompare(b.title));
 }
 
 // The built-in list of places nothing could put on a map, assembled across all
@@ -222,8 +324,9 @@ async function unlocatedPlaces(
 export async function loadListPlaces(
   userId: string,
   listId: string,
+  near?: NearFilter,
 ): Promise<PlaceView[]> {
-  return listPlaces(await getDb(), userId, listId);
+  return listPlaces(await getDb(), userId, listId, near);
 }
 
 // Count what is on the resolve queue, for the import page.
@@ -266,11 +369,12 @@ export async function loadSharedMap(token: string): Promise<SharedMap | null> {
 export async function loadSharedListPlaces(
   token: string,
   listId: string,
+  near?: NearFilter,
 ): Promise<PlaceView[] | null> {
   const db = await getDb();
 
   const share = await resolveShare(db, token);
   if (!share) return null;
 
-  return listPlaces(db, share.userId, listId);
+  return listPlaces(db, share.userId, listId, near);
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { loadListPlaces } from "@/lib/queries";
+import { parseNear } from "@/lib/geo";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +12,12 @@ export const dynamic = "force-dynamic";
 // The list id comes from the URL, so it is only ever read against the
 // *session's* user: `loadListPlaces` returns nothing for a list that user does
 // not own, which is the same answer as for a list that does not exist.
+// `near=lat,lng` narrows the answer to a box around the caller, so a phone can
+// draw the map it is standing in before the whole account has arrived. It is an
+// optimisation and nothing depends on it: a missing or malformed value simply
+// returns the entire list, which is what the client asks for next anyway.
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
@@ -20,7 +25,14 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const query = new URL(req.url).searchParams;
+  const near = parseNear(query.get("near"), query.get("radius")) ?? undefined;
+
   const { id } = await params;
-  const places = await loadListPlaces(session.user.id, decodeURIComponent(id));
+  const places = await loadListPlaces(
+    session.user.id,
+    decodeURIComponent(id),
+    near,
+  );
   return NextResponse.json({ places });
 }
