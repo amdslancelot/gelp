@@ -326,6 +326,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "tea_store",
     "cannabis_store",
     "auto_parts_store",
+    // Next to auto_parts_store, not with the workshops: this one is somewhere
+    // you buy a thing, which is the line the Shopping group is drawn on.
+    "car_stereo_store",
     "bicycle_store",
   ],
   grocery_store: [
@@ -400,6 +403,16 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "car_wash",
     "car_dealer",
     "used_car_dealer",
+    // The workshops a car actually goes to, added after a backfill read them
+    // off the pages of places saved while rebuilding a Z4. They sit with
+    // car_repair rather than under Shopping: you bring something to them and
+    // come back for it, which is what everything else in this umbrella is.
+    "auto_repair_shop",
+    "auto_body_shop",
+    "auto_upholsterer",
+    // Furniture, not cars — but the same errand, and Google uses this label for
+    // the trade rather than for a showroom.
+    "upholstery_shop",
     "laundry",
     // Grooming sits with the barber rather than under health: a haircut is an
     // appointment, not a treatment, and nothing here is clinical.
