@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { loadSharedListPlaces } from "@/lib/queries";
+import { parseNear } from "@/lib/geo";
 
 export const dynamic = "force-dynamic";
 
@@ -14,12 +15,16 @@ export async function GET(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
-  const listId = new URL(req.url).searchParams.get("list");
+  const query = new URL(req.url).searchParams;
+  const listId = query.get("list");
   if (!listId) {
     return NextResponse.json({ error: "Missing list" }, { status: 400 });
   }
 
-  const places = await loadSharedListPlaces(token, listId);
+  // Same optional "near me" window as the session route; see it for why.
+  const near = parseNear(query.get("near"), query.get("radius")) ?? undefined;
+
+  const places = await loadSharedListPlaces(token, listId, near);
   if (places === null) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

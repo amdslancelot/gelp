@@ -46,6 +46,18 @@ export interface ListSummary {
   count: number;
 }
 
+// The id of the built-in list holding every place the account has a position
+// for, across all of its lists. Like the unlocated list it is assembled rather
+// than stored, so it has a reserved id: nothing in `lists` corresponds to it.
+//
+// Only placed places. A list called "All Places" that also carried the ones
+// with no position would be the same set as every real list plus "No
+// coordinates" — and the map, which is what this list is opened for, could
+// show none of the difference. The unplaced ones already have a list of their
+// own, and it is the one that can act on them.
+export const ALL_PLACES_LIST_ID = "__all__";
+export const ALL_PLACES_LIST_NAME = "All Places";
+
 // The id of the built-in list of places with no position. Not a row in `lists`
 // — it is assembled from whatever the real lists could not place, which is why
 // it has a reserved id rather than a generated one.

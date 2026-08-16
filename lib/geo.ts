@@ -192,3 +192,71 @@ export class RegionAnchors {
     return undefined;
   }
 }
+
+// ---------------------------------------------------------------------------
+// "Near me" — the window a list is first loaded through.
+//
+// The whole account is 5321 placed places and about 2 MB of JSON. On a phone,
+// on mobile data, that is the difference between a map that is there and a map
+// that arrives. So the first request asks for a box around the user instead,
+// and the rest is filled in behind it.
+// ---------------------------------------------------------------------------
+
+export interface NearFilter extends Point {
+  radiusKm: number;
+}
+
+// Wide enough to hold a city and its day trips, so "near me" is not a claim
+// about walking distance — the point is to cut a global list down to the part
+// of the world the user is in, not to answer "what is on this street".
+export const DEFAULT_NEAR_RADIUS_KM = 50;
+
+// A box rather than a circle: the corners are further away than the radius, but
+// the query is two range comparisons an index can use, and a place appearing
+// slightly outside the nominal radius is not a wrong answer — it is simply
+// loaded a moment earlier than it would have been.
+const KM_PER_DEGREE_LAT = 111.32;
+
+// How far the box reaches, in degrees. Longitude degrees shrink towards the
+// poles, so the east-west half-width is divided by cos(lat) — without which a
+// box in Reykjavík would be half the width it was asked for.
+export function nearBox(near: NearFilter): {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+} {
+  const dLat = near.radiusKm / KM_PER_DEGREE_LAT;
+  const cos = Math.cos((near.lat * Math.PI) / 180);
+  // Past ~89° the divisor collapses and the box would span the planet anyway,
+  // so it is clamped rather than allowed to divide by something near zero.
+  const dLng = cos < 0.01 ? 180 : near.radiusKm / (KM_PER_DEGREE_LAT * cos);
+  return {
+    minLat: near.lat - dLat,
+    maxLat: near.lat + dLat,
+    minLng: near.lng - dLng,
+    maxLng: near.lng + dLng,
+  };
+}
+
+// Read a `near=lat,lng` / `radius=km` pair off a request, or null when there is
+// no usable one. Anything malformed is null rather than an error: the caller's
+// fallback is to load the whole list, which is right — a bad parameter should
+// cost the user speed, not the map.
+export function parseNear(
+  near: string | null,
+  radius: string | null,
+): NearFilter | null {
+  if (!near) return null;
+  const [lat, lng] = near.split(",").map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+
+  const asked = Number(radius);
+  const radiusKm =
+    Number.isFinite(asked) && asked > 0
+      ? Math.min(asked, 20_000) // half the planet's circumference: past this it is every place anyway
+      : DEFAULT_NEAR_RADIUS_KM;
+
+  return { lat, lng, radiusKm };
+}

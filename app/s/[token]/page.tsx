@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { loadSharedListPlaces, loadSharedMap } from "@/lib/queries";
+import {
+  ALL_PLACES_LIST_ID,
+  loadSharedListPlaces,
+  loadSharedMap,
+} from "@/lib/queries";
 import Browser from "@/app/components/Browser";
 
 // Reads the database, and the token is per-request, so nothing here is static.
@@ -29,8 +33,13 @@ export default async function SharedMapPage({
 
   // As on the owner's own page, only the first list travels with the HTML; the
   // rest are fetched through the token-authorised route as they are opened.
-  const initialPlaces = shared.lists[0]
-    ? ((await loadSharedListPlaces(token, shared.lists[0].id)) ?? [])
+  // Except "All Places", which opens first and is the whole map: too much to
+  // put in the HTML, so it comes through the token-authorised route like the
+  // rest. Same rule as the owner's own page.
+  const first = shared.lists[0];
+  const preload = first && first.id !== ALL_PLACES_LIST_ID ? first : null;
+  const initialPlaces = preload
+    ? ((await loadSharedListPlaces(token, preload.id)) ?? [])
     : [];
 
   return (
@@ -51,6 +60,7 @@ export default async function SharedMapPage({
       <Browser
         lists={shared.lists}
         initialPlaces={initialPlaces}
+        initialListId={preload?.id ?? null}
         placesUrl={`/api/s/${encodeURIComponent(token)}/places?list={id}`}
       />
     </div>
