@@ -84,6 +84,18 @@ PINNED_RE = re.compile(r"/maps/(?:search|place|dir)/(-?\d+\.\d+),(-?\d+\.\d+)")
 # A URL with no feature id and no coordinates cannot be resolved this way.
 FEATURE_RE = re.compile(r"!1s0x[0-9a-f]+:0x[0-9a-f]+", re.I)
 
+# The other shape that names a place: `?cid=<decimal>`, which is what a Saved
+# Places export and an older shared link both write. It identifies the place
+# just as exactly as a feature id does — it *is* the second half of one, in
+# decimal — and Google redirects it to the full `/maps/place/…!1s0x…` URL, so
+# the browser step that follows works on it unchanged.
+#
+# It is a separate pattern rather than a branch of FEATURE_RE because the two
+# are not interchangeable anywhere else: the "did Google keep this id?" check
+# below reads a feature id out of the *settled* URL, and a settled URL never
+# comes back in this form.
+CID_QUERY_RE = re.compile(r"[?&]cid=\d+")
+
 
 def read_queue(path: Path) -> list[tuple[str, str]]:
     """Every (url, title) in a work list written by `dump-queue.ts`."""
@@ -297,7 +309,7 @@ def main() -> int:
                 )
                 free += 1
                 continue
-            if not FEATURE_RE.search(url):
+            if not FEATURE_RE.search(url) and not CID_QUERY_RE.search(url):
                 fh.write(
                     json.dumps(
                         {"key": url, "title": title, "error": "no feature id"},
@@ -392,7 +404,10 @@ def main() -> int:
                         # later reader deserves the evidence, not the verdict.
                         settled = page.url
                         record["settled"] = settled
-                        if FEATURE_RE.search(url) and not FEATURE_RE.search(settled):
+                        named_a_place = bool(
+                            FEATURE_RE.search(url) or CID_QUERY_RE.search(url)
+                        )
+                        if named_a_place and not FEATURE_RE.search(settled):
                             record["error"] = "no such place"
                             status = "GONE"
                         else:
