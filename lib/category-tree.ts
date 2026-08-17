@@ -75,7 +75,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "pizza_restaurant",
     "pizza_delivery",
   ],
-  french_restaurant: [],
+  french_restaurant: ["brasserie"],
   european_restaurant: [
     "german_restaurant",
     "austrian_restaurant",
@@ -118,6 +118,12 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "sandwich_shop",
     "deli",
     "diner",
+    // Regional American cuisines. Google suffixes these with `_us` where the
+    // name is ambiguous outside the country, and the suffix rules cannot help:
+    // they end in `_us`, not `_restaurant`.
+    "southern_restaurant_us",
+    "southwestern_restaurant_us",
+    "pacific_northwest_restaurant_us",
   ],
   mexican_restaurant: ["taco_restaurant"],
   latin_american_restaurant: [
@@ -127,7 +133,11 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "puerto_rican_restaurant",
     "caribbean_restaurant",
   ],
-  seafood_restaurant: ["oyster_bar_restaurant", "fish_and_chips_restaurant"],
+  seafood_restaurant: [
+    "oyster_bar_restaurant",
+    "fish_and_chips_restaurant",
+    "crab_house",
+  ],
   vegetarian_restaurant: ["vegan_restaurant"],
   // Everything that is a meal but declares no cuisine.
   restaurant: [
@@ -146,6 +156,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "fusion_restaurant",
     "soup_restaurant",
     "food",
+    "grill",
+    "bar_grill",
   ],
 
   // --- drinking ----------------------------------------------------------
@@ -156,6 +168,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "tea_house",
     "bubble_tea_store",
     "juice_shop",
+    "traditional_teahouse",
+    "creperie",
+    "fruit_parlor",
   ],
   bakery: [
     "pastry_shop",
@@ -167,6 +182,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "donut_shop",
     "chocolate_shop",
     "bagel_shop",
+    "patisserie",
+    "chocolate_artisan",
   ],
   bar: [
     "cocktail_bar",
@@ -185,6 +202,20 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "hookah_bar",
     "beer_garden",
     "adult_entertainment_club",
+    "beer_hall",
+    "wine_cellar",
+    // Producers you visit. Filed as drinking rather than as manufacturing
+    // because that is why a saved place is one — `brewery` and `winery` are
+    // already here on the same reasoning.
+    "distillery",
+    "sake_brewery",
+    // Nightlife. A bare "club" is the ambiguous one; a saved place called that
+    // is far more often somewhere that opens at night than a members' society,
+    // and the sports clubs are spelled out under `sports`.
+    "club",
+    "dance_club",
+    "jazz_club",
+    "cabaret_club",
   ],
 
   // --- staying -----------------------------------------------------------
@@ -198,6 +229,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "japanese_inn",
     "farmstay",
     "private_guest_room",
+    "homestay",
+    "holiday_apartment_rental",
   ],
 
   // --- outdoors ----------------------------------------------------------
@@ -214,6 +247,12 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "playground",
     "campground",
     "rv_park",
+    // Protected land. Filed with the parks rather than under `natural_feature`
+    // because the name is a designation — somewhere with a boundary, a gate and
+    // a car park — not a description of the terrain inside it.
+    "national_forest",
+    "national_reserve",
+    "beach_pavillion",
   ],
   natural_feature: [
     "hiking_area",
@@ -231,11 +270,23 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "spring",
     "hot_spring",
     "reservoir",
+    "waterfall",
+    "ravine",
+    "cliff",
+    "cave",
+    "bay",
+    "canal",
+    "desert",
+    "salt_flat",
+    "mountain_pass",
+    "public_beach",
+    "swimming_lake",
+    "seasonal_lake",
   ],
 
   // --- looking at things -------------------------------------------------
   museum: ["art_museum", "history_museum", "war_museum"],
-  art_gallery: ["art_studio"],
+  art_gallery: ["art_studio", "art_center", "arts_organization", "artist"],
   landmark: [
     "historical_landmark",
     "cultural_landmark",
@@ -248,6 +299,15 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "bridge",
     "fountain",
     "observation_deck",
+    "heritage_building",
+    "historic_city_center",
+    "archaeological_site",
+    "fortress",
+    "war_memorial",
+    "concentration_camp_memorial_site",
+    // With `bridge`, for the same reason: infrastructure someone saved because
+    // it is worth going to look at.
+    "tunnel",
   ],
   place_of_worship: [
     "church",
@@ -258,6 +318,11 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "hindu_temple",
     "taoist_temple",
     "mosque",
+    "cathedral",
+    "catholic_cathedral",
+    "basilica",
+    "chapel",
+    "monastery",
   ],
   tourist_attraction: [
     "theme_park",
@@ -279,6 +344,10 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "water_park",
     "farm",
     "ranch",
+    "childrens_amusement_center",
+    "escape_room_center",
+    "stage",
+    "farm_household_tour",
   ],
 
   // --- buying things -----------------------------------------------------
@@ -330,6 +399,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     // you buy a thing, which is the line the Shopping group is drawn on.
     "car_stereo_store",
     "bicycle_store",
+    "outlet_mall",
+    "handicraft",
+    "jewelry_designer",
   ],
   grocery_store: [
     "supermarket",
@@ -339,7 +411,14 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "food_store",
     "butcher_shop",
   ],
-  market: ["night_market", "farmers_market", "flea_market", "clothes_market"],
+  market: [
+    "night_market",
+    "farmers_market",
+    "flea_market",
+    "clothes_market",
+    "bazar",
+    "handicraft_fair",
+  ],
 
   // --- doing things ------------------------------------------------------
   sports: [
@@ -358,6 +437,19 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "miniature_golf_course",
     "indoor_golf_course",
     "race_course",
+    "car_racing_venue",
+    "basketball_club",
+    "rowing_club",
+    "muay_thai_boxing_gym",
+    "shooting_range",
+    "public_swimming_pool",
+    "swimming_facility",
+    "recreation_center",
+    "equestrian_facility",
+    "horseback_riding_service",
+    "diving_center",
+    "rafting",
+    "canoe_kayak_rental_service",
   ],
   health: [
     "medical_clinic",
@@ -367,6 +459,19 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "spa",
     "wellness_center",
     "public_bath",
+    "hospital",
+    "acupuncture_clinic",
+    "physical_therapy_clinic",
+    "eye_care_center",
+    // Bathing. With `public_bath`, and deliberately not under `sports`: an onsen
+    // is somewhere you soak, and the swimming pools are spelled out over there.
+    "thermal_baths",
+    "day_use_onsen",
+    "outdoor_bath",
+    "day_spa",
+    "spa_garden",
+    "meditation_center",
+    "retreat_center",
   ],
   education: [
     "educational_institution",
@@ -376,6 +481,11 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "preschool",
     "library",
     "research_institute",
+    // Somewhere you go to be taught one thing once, which is still education
+    // and has nowhere better to sit.
+    "cooking_class",
+    "pottery_classes",
+    "makerspace",
   ],
 
   // --- getting there -----------------------------------------------------
@@ -395,6 +505,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "car_rental",
     "transportation_service",
     "ferry_service",
+    "car_rental_agency",
+    "boat_ramp",
   ],
 
   // --- everything else ---------------------------------------------------
@@ -423,6 +535,16 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "tanning_studio",
     "travel_agency",
     "tour_agency",
+    "tour_operator",
+    "visa_consulting_service",
+    "laundromat",
+    "screen_printer",
+    // Marques Google names individually. They are all `car_dealer` as far as the
+    // errand goes; listed rather than left to a suffix rule because there is no
+    // shared suffix to catch them.
+    "bmw_dealer",
+    "mercedes_benz_dealer",
+    "porsche_dealer",
   ],
   business: [
     "corporate_office",
@@ -439,6 +561,13 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "television_studio",
     "bank",
     "finance",
+    "radio_broadcaster",
+    "conference_center",
+    "architect",
+    "landscape_architect",
+    "food_manufacturer",
+    "frozen_food_manufacturer",
+    "food_products_supplier",
   ],
   civic: [
     "government_office",
@@ -447,8 +576,17 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "association_organization",
     "community_center",
     "cultural_center",
+    "military_base",
+    "air_force_base",
+    "tribal_headquarters",
   ],
-  residential: ["apartment_building", "apartment_complex", "condominium_complex"],
+  residential: [
+    "apartment_building",
+    "apartment_complex",
+    "condominium_complex",
+    "new_residence",
+    "tenant_ownership",
+  ],
   // Google's own "we could not say" labels. Kept rather than hidden, because a
   // saved place with no useful category is still a saved place.
   other: ["point_of_interest", "premise", "intersection"],
