@@ -475,30 +475,57 @@ async function main() {
       else keysByCid.set(cid, [key]);
     }
 
-    let corrected = 0;
-    for (const row of rows) {
-      // Falling back to the URL covers a place saved as bare coordinates, which
-      // has no CID to match on.
+    // One statement per batch, not one per row. The loop this replaces was
+    // 3613 sequential round-trips, and against production — reached through an
+    // ssh -L wrapped around a kubectl port-forward — each one costs the full
+    // latency of both hops. It took minutes, and looked like a hang.
+    //
+    // `update ... from (values ...)` says the same thing in one trip per batch:
+    // the values carry the per-row data, and the join condition is the same
+    // key match the loop did. Chunked rather than sent as one statement so a
+    // very large run does not build a single query megabytes wide, and so each
+    // batch is its own short-lived lock on the rows it touches.
+    const BATCH = 500;
+    // Flattened first: a row can correct several cache keys — the same place
+    // appears in an export under more than one URL — and the statement wants
+    // one tuple per key.
+    const updates = rows.flatMap((row) => {
       const keys = (row.cid && keysByCid.get(row.cid)) || [row.mapsUrl];
-      const done = await db
-        .update(placeCache)
-        .set({
-          lat: row.lat,
-          lng: row.lng,
-          status: "ok",
-          resolver: RESOLVER_COORDS,
-          fetchedAt: Date.now(),
-          // Only when observed. A cached address is wrong exactly when the
-          // search that wrote it found a different business, which is the same
-          // case where the coordinates moved — so leaving a stale one in place
-          // is not neutral. But writing a null over it is not better, and a run
-          // that did not look has nothing to say.
-          ...(row.address === null ? {} : { address: row.address }),
-          ...(row.category === null ? {} : { category: row.category }),
-        })
-        .where(inArray(placeCache.key, keys))
-        .returning({ key: placeCache.key });
-      corrected += done.length;
+      return keys.map((key) => ({ key, row }));
+    });
+
+    let corrected = 0;
+    const now = Date.now();
+    for (let i = 0; i < updates.length; i += BATCH) {
+      const batch = updates.slice(i, i + BATCH);
+      // Casts on the first tuple only: Postgres takes the column types of a
+      // VALUES list from its first row, and without them every parameter
+      // arrives as `text` and the join against a double precision column
+      // fails.
+      const tuples = batch.map(
+        ({ key, row }, n) =>
+          n === 0
+            ? sql`(${key}::text, ${row.lat}::double precision, ${row.lng}::double precision, ${row.address}::text, ${row.category}::text)`
+            : sql`(${key}, ${row.lat}, ${row.lng}, ${row.address}, ${row.category})`,
+      );
+      const done = await db.execute<{ key: string }>(sql`
+        update ${placeCache} as c set
+          lat = v.lat,
+          lng = v.lng,
+          status = 'ok',
+          resolver = ${RESOLVER_COORDS},
+          fetched_at = ${now},
+          -- Only when observed, exactly as the per-row update had it: a run
+          -- that did not read an address has nothing to say about the one
+          -- already stored, and writing null over it would be a claim.
+          address = coalesce(v.address, c.address),
+          category = coalesce(v.category, c.category)
+        from (values ${sql.join(tuples, sql`, `)})
+          as v(key, lat, lng, address, category)
+        where c.key = v.key
+        returning c.key
+      `);
+      corrected += done.rows.length;
     }
     console.log(`corrected ${corrected} cached rows to match`);
 
