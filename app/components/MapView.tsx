@@ -91,8 +91,11 @@ function MapController({
   const map = useMap();
   // What the map was last framed for. A pane being revealed is not a reason to
   // re-frame — that would throw away the pan the user made before they left it.
-  // Only a change of places or focus is, so a reveal re-frames exactly when the
-  // change arrived while the pane was hidden and could not be acted on.
+  // Only a change of `frameKey` — the list being shown — or of focus is, so a
+  // reveal re-frames exactly when the change arrived while the pane was hidden
+  // and could not be acted on. Filtering the places within a list deliberately
+  // does not re-frame: the user is asking which of what they can see matches,
+  // not to be flown to the matches' global extent.
   const framedFor = useRef<{
     frameKey: string;
     focus: PlaceView | null;
