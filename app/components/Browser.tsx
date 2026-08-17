@@ -672,12 +672,16 @@ export default function Browser({
           mobileTab === "list" ? "hidden" : "block"
         }`}
       >
+        {/* Only the list frames the map. Narrowing by category is a question
+            about what is on screen now — "which of these are cafes" — so
+            re-framing to the filtered set's global extent would answer a
+            different one, and throw away the area the user zoomed to. */}
         <MapView
           places={visiblePlaces}
           focus={focus}
           onBoundsChange={handleBoundsChange}
           location={location}
-          frameKey={`${selectedListId ?? ""}|${group}|${umbrella ?? ""}|${leaf ?? ""}`}
+          frameKey={selectedListId ?? ""}
         />
       </section>
 
