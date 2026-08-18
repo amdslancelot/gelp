@@ -35,7 +35,9 @@
 // same reason. The queue is left alone.
 //
 // Safe to re-run: a place that gained a `place_coords` row drops out of the
-// next dump, so an interrupted scrape resumes simply by dumping again.
+// next dump, so an interrupted scrape resumes simply by dumping again. A place
+// whose id Google has dropped drops out too, via `tombstone_cid` — otherwise
+// every run would reopen the same dead pages to relearn the same nothing.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -43,7 +45,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "../lib/db/schema";
-import { places, placeCoords } from "../lib/db/schema";
+import { places, placeCoords, tombstoneCid } from "../lib/db/schema";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -52,6 +54,13 @@ async function main() {
   );
   const limitArg = args.find((a) => a.startsWith("--limit="));
   const limit = limitArg ? Number(limitArg.split("=")[1]) : 0;
+  // Dead ids are skipped by default; this dumps them anyway. A flag rather
+  // than the default for the reason dump-queue.ts gives its --retry-failed:
+  // the tombstone was written because Google had no entry under that id, and
+  // only something outside the loop can know that has changed. That something
+  // is a person. There is no delete path for a tombstone, so without this
+  // there would be no way back at all.
+  const includeTombstoned = args.includes("--include-tombstoned");
 
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -81,6 +90,17 @@ async function main() {
           isNotNull(places.mapsUrl),
           eq(places.notAPlace, false),
           sql`not exists (select 1 from ${placeCoords} pc where pc.cid = ${places.cid})`,
+          // A CID Google will not resolve any more. Opening its URL lands on
+          // a blank map, so dumping it again spends a page load to relearn
+          // what `tombstone_cid` was created to remember — and it would do so
+          // on every run, forever, because nothing about it can change.
+          //
+          // What is dead is the id, not the place: Angkor Thom is still
+          // there, its saved id simply is not. So this drops it from the work
+          // list and says nothing about whether it is still in the world.
+          includeTombstoned
+            ? undefined
+            : sql`not exists (select 1 from ${tombstoneCid} tc where tc.cid = ${places.cid})`,
         ),
       )
       // selectDistinctOn requires the distinct column to lead the ordering;
@@ -108,6 +128,30 @@ async function main() {
     console.log(`${work.length} guessed places need a real position -> ${out}`);
     if (limit > 0 && rows.length > work.length) {
       console.log(`  ${rows.length - work.length} left for a later run`);
+    }
+
+    // Say what was left out. A work list that silently drops rows reads as
+    // "this is everything", and the number of dead ids is exactly the sort of
+    // thing worth noticing if it starts growing.
+    if (!includeTombstoned) {
+      const [dead] = await db
+        .select({ count: sql<number>`count(distinct ${places.mapsUrl})::int` })
+        .from(places)
+        .where(
+          and(
+            isNotNull(places.cid),
+            isNotNull(places.mapsUrl),
+            eq(places.notAPlace, false),
+            sql`not exists (select 1 from ${placeCoords} pc where pc.cid = ${places.cid})`,
+            sql`exists (select 1 from ${tombstoneCid} tc where tc.cid = ${places.cid})`,
+          ),
+        );
+      if ((dead?.count ?? 0) > 0) {
+        console.log(
+          `  ${dead!.count} skipped: Google no longer has the id. ` +
+            `Pass --include-tombstoned to try them anyway.`,
+        );
+      }
     }
     if (work.length > 0) {
       console.log(
