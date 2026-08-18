@@ -25,6 +25,7 @@
 export const CATEGORY_TREE: Record<string, readonly string[]> = {
   // --- eating ------------------------------------------------------------
   japanese_restaurant: [
+    "japanese_steakhouse",
     "sushi_restaurant",
     "ramen_restaurant",
     "japanese_izakaya_restaurant",
@@ -45,6 +46,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
   // cuisines are not read as one by anyone who eats them.
   taiwanese_restaurant: [],
   chinese_restaurant: [
+    "zhejiang_restaurant",
+    "hong_kong_style_fast_food_restaurant",
+    "porridge_restaurant",
     "cantonese_restaurant",
     "sichuan_restaurant",
     "dim_sum_restaurant",
@@ -54,6 +58,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
   ],
   korean_restaurant: ["korean_barbecue_restaurant"],
   asian_restaurant: [
+    "singaporean_restaurant",
+    "indonesian_restaurant",
+    "south_asian_restaurant",
     "asian_fusion_restaurant",
     "thai_restaurant",
     "vietnamese_restaurant",
@@ -77,6 +84,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
   ],
   french_restaurant: ["brasserie"],
   european_restaurant: [
+    "belgian_restaurant",
     "german_restaurant",
     "austrian_restaurant",
     "dutch_restaurant",
@@ -93,6 +101,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "portuguese_restaurant",
   ],
   middle_eastern_restaurant: [
+    "israeli_restaurant",
     "turkish_restaurant",
     "persian_restaurant",
     "moroccan_restaurant",
@@ -124,9 +133,12 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "southern_restaurant_us",
     "southwestern_restaurant_us",
     "pacific_northwest_restaurant_us",
+    "traditional_american_restaurant",
   ],
   mexican_restaurant: ["taco_restaurant"],
   latin_american_restaurant: [
+    "brazilian_restaurant",
+    "jamaican_restaurant",
     "peruvian_restaurant",
     "colombian_restaurant",
     "cuban_restaurant",
@@ -158,6 +170,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "food",
     "grill",
     "bar_grill",
+    // Google words these as a bar, but the errand is a meal.
+    "poke_bar",
+    "salad_shop",
   ],
 
   // --- drinking ----------------------------------------------------------
@@ -171,6 +186,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "traditional_teahouse",
     "creperie",
     "fruit_parlor",
+    "cha_chaan_teng_hong_kong_style_cafe",
   ],
   bakery: [
     "pastry_shop",
@@ -216,6 +232,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "dance_club",
     "jazz_club",
     "cabaret_club",
+    "lesbian_bar",
+    "karaoke",
   ],
 
   // --- staying -----------------------------------------------------------
@@ -231,6 +249,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "private_guest_room",
     "homestay",
     "holiday_apartment_rental",
+    "mountain_cabin",
   ],
 
   // --- outdoors ----------------------------------------------------------
@@ -253,6 +272,7 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "national_forest",
     "national_reserve",
     "beach_pavillion",
+    "arboretum",
   ],
   natural_feature: [
     "hiking_area",
@@ -348,6 +368,9 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "escape_room_center",
     "stage",
     "farm_household_tour",
+    "observatory",
+    "drive_in_movie_theater",
+    "festival",
   ],
 
   // --- buying things -----------------------------------------------------
@@ -402,6 +425,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "outlet_mall",
     "handicraft",
     "jewelry_designer",
+    "furniture_accessories",
+    "plant_nursery",
   ],
   grocery_store: [
     "supermarket",
@@ -410,6 +435,12 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "asian_grocery_store",
     "food_store",
     "butcher_shop",
+    // Food you take home, so with the grocers rather than the general stores
+    // the suffix rule was sending them to.
+    "tofu_shop",
+    "frozen_food_store",
+    "health_food_store",
+    "organic_shop",
   ],
   market: [
     "night_market",
@@ -450,6 +481,14 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "diving_center",
     "rafting",
     "canoe_kayak_rental_service",
+    "baseball",
+    "ice_skating_rink",
+    "indoor_swimming_pool",
+    "rock_climbing_gym",
+    "skatepark",
+    "off_road_racing_venue",
+    // Somewhere you go to ski. The lodging on the mountain is `resort_hotel`.
+    "ski_resort",
   ],
   health: [
     "medical_clinic",
@@ -472,6 +511,15 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "spa_garden",
     "meditation_center",
     "retreat_center",
+    "acupuncturist",
+    "cosmetic_dentist",
+    "family_practice_physician",
+    "optometrist",
+    "orthodontist",
+    "pain_control_clinic",
+    "massage_spa",
+    "thai_massage_shop",
+    "sauna",
   ],
   education: [
     "educational_institution",
@@ -486,6 +534,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "cooking_class",
     "pottery_classes",
     "makerspace",
+    "public_library",
+    "public_university",
   ],
 
   // --- getting there -----------------------------------------------------
@@ -507,6 +557,8 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "ferry_service",
     "car_rental_agency",
     "boat_ramp",
+    "international_airport",
+    "cruise_terminal",
   ],
 
   // --- everything else ---------------------------------------------------
@@ -545,6 +597,19 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "bmw_dealer",
     "mercedes_benz_dealer",
     "porsche_dealer",
+    // Repairs. The suffix rule reads `_shop` as retail and files these under
+    // Shopping, which is the wrong errand: you leave something and come back.
+    "bicycle_repair_shop",
+    "mobile_phone_repair_shop",
+    "shoe_repair_shop",
+    "luggage_repair_service",
+    "custom_tailor",
+    "self_service_car_wash",
+    "automobile_storage_facility",
+    "shipping_and_mailing_service",
+    "photo_lab",
+    "waste_management_service",
+    "recycling_center",
   ],
   business: [
     "corporate_office",
@@ -568,6 +633,12 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "food_manufacturer",
     "frozen_food_manufacturer",
     "food_products_supplier",
+    "electronics_manufacturer",
+    "oil_refinery",
+    "box_lunch_supplier",
+    "clothing_wholesale_market_place",
+    "recording_studio",
+    "photography_studio",
   ],
   civic: [
     "government_office",
@@ -579,6 +650,11 @@ export const CATEGORY_TREE: Record<string, readonly string[]> = {
     "military_base",
     "air_force_base",
     "tribal_headquarters",
+    "civic_center",
+    "council",
+    "social_services_organization",
+    "youth_organization",
+    "social_club",
   ],
   residential: [
     "apartment_building",
