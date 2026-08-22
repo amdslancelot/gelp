@@ -46,7 +46,7 @@ export default async function SharedMapPage({
     <div className="flex h-screen flex-col">
       <header className="flex items-center justify-between gap-3 border-b border-neutral-200 bg-white px-4 py-2.5">
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className="text-xl font-bold tracking-tight text-emerald-600">
+          <span className="text-xl font-bold tracking-tight text-emerald-700">
             Gelp
           </span>
           <span className="truncate text-sm text-neutral-500">

@@ -268,7 +268,7 @@ export default function Uploader({
               working
                 ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
                 : "cursor-pointer border-neutral-300 bg-white hover:bg-neutral-50"
-            } ${dragOver ? "border-emerald-400 bg-emerald-50" : ""}`}
+            } ${dragOver ? "border-emerald-500 bg-emerald-50" : ""}`}
           >
             <p className="text-sm font-medium text-neutral-700">
               {done
@@ -365,7 +365,7 @@ export default function Uploader({
         <div className="mt-4">
           <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200">
             <div
-              className="h-full rounded-full bg-emerald-500 transition-all duration-300 ease-out"
+              className="h-full rounded-full bg-emerald-600 transition-all duration-300 ease-out"
               style={{ width: `${done ? 100 : pct}%` }}
             />
           </div>
@@ -681,7 +681,7 @@ function Section({
 }) {
   const heading = {
     neutral: "text-neutral-400",
-    green: "text-emerald-600",
+    green: "text-emerald-700",
     red: "text-red-500",
   }[tone];
   return (
@@ -713,7 +713,7 @@ function Term({
       title={hint}
       className={`min-w-[5.5rem] flex-1 rounded-lg border px-2.5 py-2 text-center ${
         total
-          ? "border-emerald-600 bg-emerald-600"
+          ? "border-emerald-700 bg-emerald-700"
           : emphasis
             ? "border-amber-300 bg-amber-50"
             : "border-emerald-200 bg-white"
@@ -736,7 +736,7 @@ function Term({
             ? "text-emerald-50"
             : emphasis
               ? "text-amber-700"
-              : "text-emerald-700"
+              : "text-emerald-800"
         }`}
       >
         {label}
@@ -751,7 +751,7 @@ function Plus({ sign = "+" }: { sign?: string }) {
   return (
     <div
       aria-hidden
-      className="flex shrink-0 items-center text-sm font-medium text-emerald-300"
+      className="flex shrink-0 items-center text-sm font-medium text-emerald-400"
     >
       {sign}
     </div>
@@ -894,7 +894,7 @@ function ListBreakdown({ lists }: { lists: ListAnalysis[] }) {
                       thing. */}
                   <td className="px-3 py-1.5 text-right">
                     {l.status === "new" ? (
-                      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">
+                      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800">
                         New list
                       </span>
                     ) : (
@@ -931,20 +931,20 @@ function ModeButton({
       onClick={onClick}
       className={`rounded-xl border px-4 py-3 text-left transition ${
         emphasis
-          ? "border-emerald-300 bg-emerald-50 hover:bg-emerald-100"
+          ? "border-emerald-400 bg-emerald-50 hover:bg-emerald-100"
           : "border-neutral-300 bg-white hover:bg-neutral-50"
       }`}
     >
       <div
         className={`text-sm font-semibold ${
-          emphasis ? "text-emerald-800" : "text-neutral-800"
+          emphasis ? "text-emerald-900" : "text-neutral-800"
         }`}
       >
         {title}
       </div>
       <div
         className={`mt-1 text-xs leading-relaxed ${
-          emphasis ? "text-emerald-700/80" : "text-neutral-500"
+          emphasis ? "text-emerald-800/80" : "text-neutral-500"
         }`}
       >
         {detail}
