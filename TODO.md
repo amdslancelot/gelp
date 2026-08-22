@@ -69,9 +69,13 @@ deployed but these two variables are not in the `gelp-env` Secret yet, so
       `drive.file` is per-file by design — an app sees what its owner explicitly
       picks and nothing else, which is exactly why it needs no Google security
       review. A Takeout export generated next month is a file nobody has picked,
-      so no unattended job can reach it. Verified empirically: after picking a
-      folder, `files.list` returned nothing at all, not even the folder's
-      contents. The alternatives were `drive.readonly` (restricted scope: CASA
+      so no unattended job can reach it. Verified empirically, on the second
+      attempt: the first test ran without the Picker's required `setAppId`, so
+      it granted nothing and proved nothing. Retested properly — after picking
+      the folder, the grant held the folder itself plus only the one zip that
+      had been picked individually, while a second zip sitting beside it in the
+      same folder stayed invisible. Existing contents are not granted, so
+      future ones cannot be either. The alternatives were `drive.readonly` (restricted scope: CASA
       security assessment to publish, or 7-day refresh tokens while in Testing)
       or a service account each user shares a folder with (works, but adds a
       robot account and a manual sharing step). Neither was worth it against a
