@@ -23,6 +23,17 @@ declare global {
 
 const PICKER_SCRIPT = "https://apis.google.com/js/api.js";
 
+// The parts of an import dry run this panel shows. The upload page renders the
+// full breakdown; here the question is narrower — is the export in that folder
+// current enough to import — so it shows the size of the change and, above all,
+// what would be deleted.
+type SyncPreview = {
+  places: number;
+  lists: { name: string; status: "new" | "replace" }[];
+  removed: { name: string; places: number }[];
+  emptyExport: boolean;
+};
+
 export type DriveState = {
   connected: boolean;
   enabled: boolean;
@@ -56,6 +67,52 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
   const [state, setState] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<SyncPreview | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  // Ask what importing the newest zip in the folder would do, without writing.
+  // Deliberately not one click all the way through: a Takeout export is a
+  // complete snapshot, so importing a stale one deletes every list saved since
+  // it was taken, and only the user knows whether the export is current.
+  async function checkForUpdate() {
+    setError(null);
+    setDone(null);
+    setPreview(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/drive/sync?dryRun=1", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Could not read the folder");
+      setPreview({
+        places: body.places,
+        lists: body.lists,
+        removed: body.removed,
+        emptyExport: body.emptyExport,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Import for real, now that the user has seen what it would do.
+  async function importNow() {
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/drive/sync", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "The import failed");
+      setPreview(null);
+      setDone("Imported. Your lists are up to date.");
+      setState((s) => ({ ...s, lastSyncedAt: Date.now(), lastError: null }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const pickerKey = process.env.NEXT_PUBLIC_GOOGLE_PICKER_KEY;
 
@@ -197,6 +254,15 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
             >
               {state.folderName ? "Change folder" : "Pick the Takeout folder"}
             </button>
+            {state.folderName && (
+              <button
+                onClick={checkForUpdate}
+                disabled={busy}
+                className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+              >
+                {busy ? "Checking…" : "Sync now"}
+              </button>
+            )}
             <button
               onClick={disconnect}
               disabled={busy}
@@ -207,6 +273,72 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
           </>
         )}
       </div>
+
+      {done && (
+        <p className="mt-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+          {done}
+        </p>
+      )}
+
+      {preview && (
+        <div className="mt-3 rounded border border-neutral-200 bg-neutral-50 px-3 py-3 text-sm">
+          {preview.emptyExport ? (
+            <p className="text-amber-800">
+              That zip contains no lists at all — far more likely a broken
+              download than an emptied account. Nothing would be imported and
+              nothing deleted.
+            </p>
+          ) : (
+            <>
+              <p className="text-neutral-700">
+                The newest export in that folder has{" "}
+                <strong>{preview.places.toLocaleString()}</strong> places across{" "}
+                <strong>{preview.lists.length}</strong> lists.
+              </p>
+              {preview.removed.length > 0 && (
+                <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                  <p className="font-medium">
+                    {preview.removed.length} stored list
+                    {preview.removed.length === 1 ? "" : "s"} would be deleted,
+                    because this export does not contain{" "}
+                    {preview.removed.length === 1 ? "it" : "them"}:
+                  </p>
+                  <ul className="mt-1 list-inside list-disc">
+                    {preview.removed.map((r) => (
+                      <li key={r.name}>
+                        {r.name}{" "}
+                        <span className="text-amber-700">
+                          ({r.places} places)
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1">
+                    If you saved those after this export was taken, take a fresh
+                    Takeout instead of importing this one.
+                  </p>
+                </div>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={importNow}
+                  disabled={busy}
+                  className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  {busy ? "Importing…" : "Import this export"}
+                </button>
+                <button
+                  onClick={() => setPreview(null)}
+                  disabled={busy}
+                  className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <dl className="mt-4 space-y-1 text-sm text-neutral-500">
         {state.folderName && (
