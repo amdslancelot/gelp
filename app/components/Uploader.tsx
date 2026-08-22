@@ -470,6 +470,9 @@ function AnalysisPanel({
   // every place between them.
   const active =
     confirmed + guessed + t.cachedMissing + t.unknown + t.alreadyQueued;
+  // The other half: what the import throws away. `active + dropped` is the
+  // source count, which is what makes showing them in the same shape honest.
+  const dropped = t.gone + t.notPlace;
 
   if (analysis.emptyExport) {
     return (
@@ -560,39 +563,36 @@ function AnalysisPanel({
         </p>
       </Section>
 
-      <Section
-        title="Dropped"
-        tone={t.gone + t.notPlace > 0 ? "red" : "neutral"}
-      >
-        {/* Only tinted when something is actually dropped: a red panel saying
-            "nothing" reads as a warning about the nothing. */}
-        <ul
-          className={`space-y-1 text-xs ${
-            t.gone + t.notPlace > 0
-              ? "rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-800"
-              : "text-neutral-500"
-          }`}
-        >
-          {t.gone > 0 && (
-            <li>
-              <span className="font-medium text-red-900">
-                {t.gone.toLocaleString()}
-              </span>{" "}
-              {t.gone === 1 ? "has" : "have"} a dead Google link — no pin.
-            </li>
-          )}
-          {t.notPlace > 0 && (
-            <li>
-              <span className="font-medium text-red-900">
-                {t.notPlace.toLocaleString()}
-              </span>{" "}
-              {t.notPlace === 1 ? "is" : "are"} not map places.
-            </li>
-          )}
-          {t.gone === 0 && t.notPlace === 0 && (
-            <li>Nothing — every place in this export is on the map.</li>
-          )}
-        </ul>
+      {/* Summed the same way as Active, because it is the other half of the
+          same accounting: Active + Dropped = Source. Two lists of numbers laid
+          out differently would read as two different kinds of claim, when the
+          only difference between them is which side of the total they fall on. */}
+      <Section title="Dropped" tone={dropped > 0 ? "red" : "neutral"}>
+        {dropped > 0 ? (
+          <div className="flex flex-wrap items-stretch gap-2">
+            <Term
+              tone="red"
+              label="Dead link"
+              value={t.gone}
+              hint="The saved Google link no longer resolves, so there is no page to read a position off. These get no pin."
+            />
+            <Plus tone="red" />
+            <Term
+              tone="red"
+              label="Not places"
+              value={t.notPlace}
+              hint="Saved shopping items and bare links. They never had a position, so there is nothing to drop but the row."
+            />
+            <Plus tone="red" sign="=" />
+            <Term tone="red" label="Dropped" value={dropped} total />
+          </div>
+        ) : (
+          /* Not tinted, and not laid out as a sum: a red panel of zeroes reads
+             as a warning about the nothing. */
+          <p className="text-xs text-neutral-500">
+            Nothing — every place in this export is on the map.
+          </p>
+        )}
       </Section>
 
       <p className="mt-3 text-[11px] text-neutral-400">
@@ -709,29 +709,51 @@ function Section({
   );
 }
 
-// One term of the Active sum: a count and what it counts.
+// The two sums a Term can belong to. Only a palette — the arithmetic and the
+// layout are identical, which is the point: Active and Dropped are the two
+// halves of one accounting, and reading them differently would suggest they
+// answer different kinds of question.
+const TERM_TONES = {
+  green: {
+    total: "border-emerald-800 bg-emerald-800",
+    plain: "border-emerald-200 bg-white",
+    totalLabel: "text-emerald-50",
+    plainLabel: "text-emerald-900",
+    sign: "text-emerald-500",
+  },
+  red: {
+    total: "border-red-800 bg-red-800",
+    plain: "border-red-200 bg-white",
+    totalLabel: "text-red-50",
+    plainLabel: "text-red-900",
+    sign: "text-red-400",
+  },
+} as const;
+
+type Tone = keyof typeof TERM_TONES;
+
+// One term of a sum: a count and what it counts.
 function Term({
   label,
   value,
   hint,
   emphasis,
   total,
+  tone = "green",
 }: {
   label: string;
   value: number;
   hint?: string;
   emphasis?: boolean;
   total?: boolean;
+  tone?: Tone;
 }) {
+  const t = TERM_TONES[tone];
   return (
     <div
       title={hint}
       className={`min-w-[5.5rem] flex-1 rounded-lg border px-2.5 py-2 text-center ${
-        total
-          ? "border-emerald-800 bg-emerald-800"
-          : emphasis
-            ? "border-amber-300 bg-amber-50"
-            : "border-emerald-200 bg-white"
+        total ? t.total : emphasis ? "border-amber-300 bg-amber-50" : t.plain
       }`}
     >
       <div
@@ -747,11 +769,7 @@ function Term({
       </div>
       <div
         className={`text-[10px] uppercase tracking-wide ${
-          total
-            ? "text-emerald-50"
-            : emphasis
-              ? "text-amber-700"
-              : "text-emerald-900"
+          total ? t.totalLabel : emphasis ? "text-amber-700" : t.plainLabel
         }`}
       >
         {label}
@@ -762,11 +780,17 @@ function Term({
 
 // The operator between two terms. Purely typographic, so it is hidden from
 // screen readers rather than read out as part of the label.
-function Plus({ sign = "+" }: { sign?: string }) {
+function Plus({
+  sign = "+",
+  tone = "green",
+}: {
+  sign?: string;
+  tone?: Tone;
+}) {
   return (
     <div
       aria-hidden
-      className="flex shrink-0 items-center text-sm font-medium text-emerald-500"
+      className={`flex shrink-0 items-center text-sm font-medium ${TERM_TONES[tone].sign}`}
     >
       {sign}
     </div>
