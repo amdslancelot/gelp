@@ -69,7 +69,28 @@ fi
 # gives an unqualified build, so no retag is needed.
 IMAGE="localhost/gelp:latest"
 echo "==> Building ${IMAGE} with ${CONTAINER_TOOL}"
-"${CONTAINER_TOOL}" build -f deploy/Dockerfile -t "${IMAGE}" .
+# The two NEXT_PUBLIC_* values have to be present during `npm run build`, not
+# just at runtime: Next.js compiles them into the browser bundle, so a value
+# that only reaches the gelp-env Secret arrives too late to appear in the
+# JavaScript. Read them out of .env.prod — the same file the Secret is built
+# from, so there is one place to set them — and pass them as build args.
+#
+# Missing values are not an error: the app runs fine without the Drive picker,
+# and failing a deploy over it would be worse than shipping without it. The
+# settings page says which variable is missing if anyone tries to use it.
+BUILD_ARGS=()
+if [ -f "${REPO_ROOT}/.env.prod" ]; then
+  for var in NEXT_PUBLIC_GOOGLE_PICKER_KEY NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER; do
+    value="$(grep -E "^${var}=" "${REPO_ROOT}/.env.prod" | tail -n1 | cut -d= -f2-)"
+    if [ -n "${value}" ]; then
+      BUILD_ARGS+=(--build-arg "${var}=${value}")
+    else
+      echo "==> NOTE: ${var} is not in .env.prod; the Drive picker will be unavailable"
+    fi
+  done
+fi
+
+"${CONTAINER_TOOL}" build -f deploy/Dockerfile "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}" -t "${IMAGE}" .
 
 echo "==> Importing ${IMAGE} into k3s containerd"
 if [ "${CONTAINER_TOOL}" = "podman" ]; then
