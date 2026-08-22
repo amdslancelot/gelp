@@ -18,42 +18,35 @@ local only. What's left:
 - [ ] *(Optional, only if data grows)* add indexes on the FK columns
       `lists.user_id`, `places.user_id`, `places.list_id` — irrelevant at 70 lists.
 
-## Prod rollout (needs SSH to the OCI box)
+## Prod rollout — done
 
-Target: fresh gelp deploy onto the existing prod k3s (where snoopy + the shared
-Postgres already run), seeded with the current data.
+`https://gelp.lans-h.cc` is live and serving on a valid Let's Encrypt
+certificate (issued 2026-07-24), so the deploy, DNS, ingress and cert steps
+this section used to list all completed. The list itself is gone rather than
+ticked off: it was a runbook for work that no longer needs doing.
 
-- [ ] **OCI security list:** allow inbound TCP **80, 443, 9000** (snoopy likely
-      opened 80/443; 9000 is gelp's webhook — check it doesn't collide with a
-      snoopy webhook listener; if it does, share one listener or pick another port).
-- [ ] **Confirm the shared data plane** on the box: `kubectl get svc postgres -n data`
-      exists; note whether Postgres is a Deployment or StatefulSet (sets
-      `POSTGRES_WORKLOAD` for the next step).
-- [ ] **Provision gelp on prod Postgres:**
-      `GELP_DB_PASSWORD="$(openssl rand -hex 24)" bash /opt/gelp/scripts/provision-db.sh`
-      (keep the password). Verifies `gelp_rw` isolation automatically.
-- [ ] **Create `/opt/gelp/.env.prod`** from `.env.prod.example` (gitignored):
-      new OAuth client ID/secret, `DATABASE_URL` with the `gelp_rw` password
-      from the previous step + `@postgres.data.svc:5432/gelp`,
-      `AUTH_URL=https://gelp.lans-h.cc`, `ALLOWED_EMAILS=` (empty, public).
-- [ ] **Bootstrap + deploy:** run `setup-server.sh` with `GELP_HOST=gelp.lans-h.cc`,
-      `LETSENCRYPT_EMAIL`, a fresh `WEBHOOK_SECRET`, `REPO_URL` — it skips the
-      k3s install since k3s already exists — then it runs `deploy.sh` (builds the
-      image, creates the `gelp-env` Secret from `.env.prod`, applies the prod
-      overlay, cert-manager issues the Let's Encrypt cert).
-- [ ] **Seed the data:** regenerate the data-only dump from the preserved
-      `gelp-pgdata` podman volume (throwaway `postgres:17` container →
-      `pg_dump --data-only --disable-triggers -t users -t lists -t places -t place_cache`),
-      **re-point `user_id` to the internal UUID `d79ce418-4686-4c6e-b077-654bcbc7e900`**,
-      and load into prod's `gelp` DB. (The UUID is stable; prod login stamps
-      `google_sub` on first sign-in, same as staging.)
-- [ ] **Verify prod:** `gelp_rw` reaches `gelp`, is refused on `snoopy_home`,
-      has no superuser; `https://gelp.lans-h.cc` serves with a valid cert; sign
-      in shows the 70 lists.
-- [ ] **Wire push-to-deploy:** GitHub webhook → `http://92.5.135.46:9000/hooks/deploy`,
-      secret = `WEBHOOK_SECRET`, push events only.
-- [ ] *(If adopting snoopy's Gate 3)* `shred -u /opt/gelp/.env.prod` after the
-      first deploy.
+Not verifiable from a laptop, so left here as the things to spot-check next time
+anyone is on the box:
+
+- [ ] `gelp_rw` reaches `gelp`, is refused on `snoopy_home`, has no superuser.
+- [ ] Push-to-deploy webhook is wired and firing (GitHub → `:9000/hooks/deploy`).
+- [ ] `/opt/gelp/.env.prod` shredded after the first deploy, if adopting
+      snoopy's Gate 3.
+
+New, and needed before the per-user Drive sync works in prod — the app is
+deployed but these two variables are not in the `gelp-env` Secret yet, so
+`/settings` renders and Connect answers 503:
+
+- [ ] Add `DRIVE_TOKEN_KEY` (`openssl rand -base64 32`) and
+      `NEXT_PUBLIC_GOOGLE_PICKER_KEY` to `/opt/gelp/.env.prod`, then redeploy so
+      `deploy.sh` rebuilds the Secret.
+- [ ] Add `https://gelp.lans-h.cc/api/drive/callback` to the prod OAuth client's
+      redirect URIs.
+- [ ] Publish the OAuth app (Google Auth Platform → Audience → Publish app).
+      Blocked until Branding carries the home page and privacy policy URLs —
+      `/privacy` ships in this branch for exactly that. Publishing matters: a
+      refresh token issued while the app is in Testing expires after 7 days, and
+      that is the credential the nightly sync runs on.
 
 ## Housekeeping
 
