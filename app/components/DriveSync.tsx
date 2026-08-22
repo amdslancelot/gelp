@@ -38,6 +38,22 @@ export type DriveState = {
   lastError: string | null;
 };
 
+// Read a JSON response, or fail with something that names what actually came
+// back. An API answering with HTML means the request never reached the route —
+// a session that expired into a login redirect, or a dev server that has not
+// compiled the route yet — and "Unexpected token '<'" describes none of that.
+async function readJson(res: Response): Promise<Record<string, unknown>> {
+  const type = res.headers.get("content-type") ?? "";
+  if (!type.includes("application/json")) {
+    throw new Error(
+      res.status === 401 || res.redirected
+        ? "Your session expired — reload the page and sign in again."
+        : `The server answered ${res.status} with a page instead of data. Reload and try again.`,
+    );
+  }
+  return (await res.json()) as Record<string, unknown>;
+}
+
 // Load Google's picker script once and resolve when the picker module is ready.
 // Called on click rather than on mount: a settings page visit that never syncs
 // should not fetch a third-party script.
@@ -86,15 +102,13 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
       }
 
       const tokenRes = await fetch("/api/drive/picker-token");
+      const tokenBody = await readJson(tokenRes);
       if (!tokenRes.ok) {
-        const body = (await tokenRes.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(body.error ?? "Could not start the picker");
+        throw new Error(
+          (tokenBody.error as string) ?? "Could not start the picker",
+        );
       }
-      const { accessToken } = (await tokenRes.json()) as {
-        accessToken: string;
-      };
+      const accessToken = tokenBody.accessToken as string;
 
       await loadPicker();
       const picker = window.google!.picker;
@@ -124,15 +138,16 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ fileId: doc.id }),
             });
-            const body = await res.json();
-            if (!res.ok) throw new Error(body.error ?? "Could not read it");
+            const body = await readJson(res);
+            if (!res.ok)
+              throw new Error((body.error as string) ?? "Could not read it");
             setPreview({
               fileName: doc.name ?? "the picked file",
               fileId: doc.id,
-              places: body.places,
-              lists: body.lists,
-              removed: body.removed,
-              emptyExport: body.emptyExport,
+              places: body.places as number,
+              lists: body.lists as unknown[],
+              removed: body.removed as { name: string; places: number }[],
+              emptyExport: body.emptyExport as boolean,
             });
           } catch (err) {
             setError(
@@ -161,8 +176,9 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileId: preview.fileId }),
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "The import failed");
+      const body = await readJson(res);
+      if (!res.ok)
+        throw new Error((body.error as string) ?? "The import failed");
       setPreview(null);
       setDone("Imported. Your lists are up to date.");
       setState((s) => ({ ...s, lastSyncedAt: Date.now(), lastError: null }));
