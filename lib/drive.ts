@@ -1,96 +1,40 @@
-import { JWT } from "google-auth-library";
-
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 
-// True when the environment carries everything the Drive sync needs.
-export function isDriveConfigured(): boolean {
-  return Boolean(
-    process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 &&
-    process.env.DRIVE_FOLDER_ID,
-  );
-}
-
-// Build an authorized JWT client from the base64-encoded service account JSON.
-function buildJwtClient(): JWT {
-  const base64 = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64;
-  if (!base64) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 is not set");
-  }
-  const json = JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
-  return new JWT({
-    email: json.client_email,
-    key: json.private_key,
-    scopes: [DRIVE_SCOPE],
-  });
-}
-
-// Fetch a bearer access token from the service account.
-async function getAccessToken(client: JWT): Promise<string> {
-  const { token } = await client.getAccessToken();
-  if (!token) throw new Error("Failed to obtain a Drive access token");
-  return token;
-}
-
-// Download the newest Takeout zip from a Drive folder and return its bytes.
-// Lists candidate files, ordered newest first, and downloads the first match.
+// Reading the one Takeout zip the user just handed over in the Google Picker.
 //
-// Takes the token and folder as arguments rather than reading the environment,
-// because there is no longer one of either: the nightly sync runs this once per
-// user, with that user's own access token and the folder they picked.
-export async function fetchTakeoutZipFrom(
+// There is no folder-watching here, and there cannot be: the `drive.file` scope
+// is per-file by design — an app sees what the user explicitly picks and
+// nothing else, which is exactly why it needs no Google security review. A zip
+// Takeout generates next month is a file nobody has picked yet, so no query
+// could ever find it. Hence a sync somebody presses, rather than one that runs
+// at 03:30 with nobody there to pick anything.
+
+// Google's own words for why a Drive call failed, which are the only useful
+// part of it — "403" alone cannot distinguish an API nobody enabled from a file
+// this app was never given. Falls back to the status when there is no message.
+async function describeDriveError(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as {
+    error?: { message?: string };
+  } | null;
+  const message = body?.error?.message;
+  return message ? `${res.status} — ${message}` : `HTTP ${res.status}`;
+}
+
+// Download one Drive file by id, with the user's own access token.
+//
+// The id comes from the Picker, which is the only thing that can produce one
+// this app is allowed to read — so an id from anywhere else simply answers 404.
+export async function fetchDriveFile(
   accessToken: string,
-  folderId: string,
+  fileId: string,
 ): Promise<Buffer> {
-  const authHeader = { Authorization: `Bearer ${accessToken}` };
-
-  const query = [
-    `'${folderId}' in parents`,
-    "name contains 'takeout'",
-    "mimeType = 'application/zip'",
-    "trashed = false",
-  ].join(" and ");
-
-  const listUrl = new URL(DRIVE_FILES_URL);
-  listUrl.searchParams.set("q", query);
-  listUrl.searchParams.set("orderBy", "createdTime desc");
-  listUrl.searchParams.set("pageSize", "1");
-  listUrl.searchParams.set("fields", "files(id,name,createdTime)");
-
-  const listRes = await fetch(listUrl, { headers: authHeader });
-  if (!listRes.ok) {
-    throw new Error(`Drive list failed: ${listRes.status}`);
+  const url = new URL(`${DRIVE_FILES_URL}/${fileId}`);
+  url.searchParams.set("alt", "media");
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Drive download failed: ${await describeDriveError(res)}`);
   }
-  const listData = (await listRes.json()) as {
-    files?: Array<{ id: string; name: string }>;
-  };
-  const file = listData.files?.[0];
-  if (!file) {
-    throw new Error("No Takeout zip found in the Drive folder");
-  }
-
-  const downloadUrl = new URL(`${DRIVE_FILES_URL}/${file.id}`);
-  downloadUrl.searchParams.set("alt", "media");
-  const downloadRes = await fetch(downloadUrl, { headers: authHeader });
-  if (!downloadRes.ok) {
-    throw new Error(`Drive download failed: ${downloadRes.status}`);
-  }
-
-  const arrayBuffer = await downloadRes.arrayBuffer();
-  return Buffer.from(arrayBuffer);
-}
-
-// The original single-tenant path: one service account reading one folder from
-// the environment.
-//
-// Kept only until the per-user sync has run in production for a while. It is
-// the fallback for a deployment that has the old variables set and nobody
-// connected yet — see TODO.md; both variables go away with it.
-export async function fetchLatestTakeoutZip(): Promise<Buffer> {
-  const folderId = process.env.DRIVE_FOLDER_ID;
-  if (!folderId) {
-    throw new Error("DRIVE_FOLDER_ID is not set");
-  }
-  const token = await getAccessToken(buildJwtClient());
-  return fetchTakeoutZipFrom(token, folderId);
+  return Buffer.from(await res.arrayBuffer());
 }

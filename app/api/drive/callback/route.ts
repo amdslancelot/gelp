@@ -13,8 +13,11 @@ export const dynamic = "force-dynamic";
 // settings page can say what happened. The code never renders anything itself:
 // this is a redirect target for a browser, not an API for the app's own fetches.
 function back(reason: string): NextResponse {
+  // Straight to the import page on success: connecting is a means, and the
+  // thing the user came to do is one click further on. Failures go back to
+  // settings, where the connect button they just pressed still is.
   const url = new URL(
-    "/settings",
+    reason === "connected" ? "/import" : "/settings",
     process.env.AUTH_URL ?? "http://localhost:3000",
   );
   url.searchParams.set("drive", reason);
@@ -61,10 +64,10 @@ export async function GET(req: Request) {
     return back("exchange_failed");
   }
 
-  // Store the grant — but do NOT enable the sync yet. Under `drive.file` a
-  // token on its own reaches nothing: the user still has to hand over a folder
-  // through the Picker, and a sync enabled before that would run every night
-  // with nowhere to look. Enabling is the folder step's job.
+  // Store the grant. It reaches no files by itself — under `drive.file` the
+  // Picker is what hands over a file, one at a time — so this is only what lets
+  // the Picker be opened later without another trip through Google's consent
+  // screen.
   const db = await getDb();
   await db
     .update(users)

@@ -32,41 +32,32 @@ export const users = pgTable("users", {
     .notNull()
     .default(nowMillis),
 
-  // --- Nightly Drive sync (per user) ---------------------------------------
+  // --- Drive sync (per user) -----------------------------------------------
   //
-  // Opt-in: the nightly job imports for a user only while this is true. It is
-  // the job's own kill switch as well as the user's — a token Google has
-  // revoked, or one this app can no longer decrypt, flips it back to false so
-  // the sync stops asking rather than failing every night forever.
-  driveSyncEnabled: boolean("drive_sync_enabled").notNull().default(false),
+  // A sync is something the user presses, not something that happens at 03:30.
+  // The `drive.file` scope is per-file: this app sees the one zip handed to it
+  // through the Google Picker and nothing else, so there is no folder to watch
+  // and no way to find an export nobody has picked yet. Two months between
+  // Takeout exports makes that a fair trade — six presses a year against a
+  // scope that can read a whole Drive.
 
   // The user's Drive refresh token, encrypted (see lib/crypto.ts). Null until
   // they connect, and null again the moment they disconnect — disconnecting
   // revokes the token at Google and clears it here, so a stored value always
   // means "we believe this still works".
   //
+  // Kept between syncs only so the Picker can be opened without sending the
+  // user back through Google's consent screen every time.
+  //
   // Never select this into anything the client can see, and never log it: it is
   // a live credential, not a record of one.
   driveRefreshTokenEnc: text("drive_refresh_token_enc"),
 
-  // The Drive folder the user picked, via the Google Picker. Under the
-  // `drive.file` scope this app can only see files the user has handed it, so
-  // this id is not merely *where* to look — it is the whole extent of what this
-  // app is allowed to read, chosen by the user at connect time.
-  driveFolderId: text("drive_folder_id"),
-  // What that folder is called, so the settings page can show the user which
-  // folder they picked without spending a Drive call to look the name up.
-  driveFolderName: text("drive_folder_name"),
-
-  // When the nightly job last completed an import for this user. Null until the
-  // first one lands.
+  // When an import from Drive last completed. Null until the first one.
   driveLastSyncedAt: bigint("drive_last_synced_at", { mode: "number" }),
 
-  // Why the last attempt failed, in words meant for the user ("Reconnect your
-  // Google Drive"), or null when the last attempt succeeded. This is the only
-  // channel the unattended job has to reach the person it works for: nobody
-  // reads the CronJob's logs, so a failure that is not written here is a
-  // failure nobody learns about.
+  // Why the last sync failed, in words meant for the user, or null when it
+  // succeeded. Cleared by the next successful import.
   driveLastError: text("drive_last_error"),
 });
 

@@ -12,7 +12,8 @@ export const dynamic = "force-dynamic";
 // `connected` is good news; the rest are the ways the round trip can end
 // without a grant, worded as what to do rather than what failed.
 const CALLBACK_MESSAGES: Record<string, string> = {
-  connected: "Google Drive connected. Pick the folder to start syncing.",
+  connected:
+    "Google Drive connected. Press Sync from Drive to import an export.",
   cancelled: "Connection cancelled — nothing changed.",
   signed_out: "You were signed out while connecting. Try again.",
   bad_state: "That connection attempt expired. Try again.",
@@ -33,8 +34,6 @@ export default async function SettingsPage({
     await db
       .select({
         refreshTokenEnc: users.driveRefreshTokenEnc,
-        enabled: users.driveSyncEnabled,
-        folderName: users.driveFolderName,
         lastSyncedAt: users.driveLastSyncedAt,
         lastError: users.driveLastError,
       })
@@ -47,8 +46,6 @@ export default async function SettingsPage({
   // into a boolean here. Nothing below this line can leak it to the client.
   const state = {
     connected: Boolean(row?.refreshTokenEnc),
-    enabled: Boolean(row?.enabled),
-    folderName: row?.folderName ?? null,
     lastSyncedAt: row?.lastSyncedAt ?? null,
     lastError: row?.lastError ?? null,
   };

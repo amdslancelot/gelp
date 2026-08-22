@@ -22,7 +22,6 @@ const PUBLIC_PREFIXES = [
   // log in to read is not one you can consult before deciding to.
   "/privacy",
   "/api/health",
-  "/api/cron/import",
   "/api/auth",
   "/s",
   "/api/s",

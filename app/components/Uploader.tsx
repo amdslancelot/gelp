@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { pickDriveZip, readJson } from "./drive-picker";
 import { useRouter } from "next/navigation";
 import type { DeadPlace, ImportAnalysis, ListAnalysis } from "@/lib/import";
 
@@ -36,14 +37,25 @@ interface Progress {
 //
 // The file itself is held here and uploaded a second time on confirm, so no
 // parsed export has to be kept server-side between the two requests.
-export default function Uploader() {
+// Where the export being imported came from. Both sources run the same two
+// steps against the same analysis and the same progress stream — only the first
+// request of each step differs, so everything below this type is shared.
+type Source =
+  | { kind: "upload"; file: File }
+  | { kind: "drive"; fileId: string; name: string };
+
+export default function Uploader({
+  driveConnected,
+}: {
+  driveConnected: boolean;
+}) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [source, setSource] = useState<Source | null>(null);
   const [analysis, setAnalysis] = useState<ImportAnalysis | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -55,7 +67,7 @@ export default function Uploader() {
   const [mode, setMode] = useState<Mode>("queued");
 
   const reset = () => {
-    setFile(null);
+    setSource(null);
     setAnalysis(null);
     setError(null);
     setResult(null);
@@ -63,8 +75,8 @@ export default function Uploader() {
     setDone(false);
   };
 
-  // Step one: ask what this file would do. Nothing is written by this.
-  const analyze = useCallback(async (picked: File) => {
+  // Step one: ask what this export would do. Nothing is written by this.
+  const analyze = useCallback(async (picked: Source) => {
     if (busyRef.current) return;
     busyRef.current = true;
     setAnalyzing(true);
@@ -73,34 +85,63 @@ export default function Uploader() {
     setResult(null);
     setProgress(null);
     setDone(false);
-    setFile(picked);
+    setSource(picked);
     try {
-      const body = new FormData();
-      body.append("file", picked);
-      const res = await fetch("/api/import/analyze", {
-        method: "POST",
-        body,
-      });
+      const res =
+        picked.kind === "upload"
+          ? await fetch("/api/import/analyze", {
+              method: "POST",
+              body: (() => {
+                const body = new FormData();
+                body.append("file", picked.file);
+                return body;
+              })(),
+            })
+          : await fetch("/api/drive/sync?dryRun=1", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileId: picked.fileId }),
+            });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Could not read that export");
-        setFile(null);
+        setSource(null);
         return;
       }
       setAnalysis(data as ImportAnalysis);
     } catch {
-      setError("Upload failed");
-      setFile(null);
+      setError("Could not read that export");
+      setSource(null);
     } finally {
       busyRef.current = false;
       setAnalyzing(false);
     }
   }, []);
 
+  // Open Google's picker and analyse whatever comes back. The import itself is
+  // identical to an upload from here on — the zip simply never touches a disk.
+  const pickFromDrive = useCallback(async () => {
+    if (busyRef.current) return;
+    setError(null);
+    try {
+      const doc = await pickDriveZip();
+      if (!doc) return;
+      await analyze({
+        kind: "drive",
+        fileId: doc.id,
+        name: doc.name ?? "your export",
+      });
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not open the picker",
+      );
+    }
+  }, [analyze]);
+
   // Step two: do it. The same file, sent again, now that the user has seen
   // what it would do.
   const upload = useCallback(
-    async (picked: File, chosen: Mode) => {
+    async (picked: Source, chosen: Mode) => {
       if (busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
@@ -110,13 +151,22 @@ export default function Uploader() {
       setProgress(null);
       setDone(false);
       try {
-        const body = new FormData();
-        body.append("file", picked);
-        body.append("mode", chosen);
-        const res = await fetch("/api/import/upload", {
-          method: "POST",
-          body,
-        });
+        const res =
+          picked.kind === "upload"
+            ? await fetch("/api/import/upload", {
+                method: "POST",
+                body: (() => {
+                  const body = new FormData();
+                  body.append("file", picked.file);
+                  body.append("mode", chosen);
+                  return body;
+                })(),
+              })
+            : await fetch(`/api/drive/sync?mode=${chosen}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ fileId: picked.fileId }),
+              });
 
         // Errors before the import starts (bad zip, auth) come back as plain
         // JSON, not the stream.
@@ -197,48 +247,85 @@ export default function Uploader() {
   return (
     <div>
       {showDropZone && (
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!working) setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            if (working) return;
-            const picked = e.dataTransfer.files?.[0];
-            if (picked) analyze(picked);
-          }}
-          onClick={() => {
-            if (!working) inputRef.current?.click();
-          }}
-          className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
-            working
-              ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
-              : "cursor-pointer border-neutral-300 bg-white hover:bg-neutral-50"
-          } ${dragOver ? "border-rose-400 bg-rose-50" : ""}`}
-        >
-          <p className="text-sm font-medium text-neutral-700">
-            {done
-              ? "Import complete"
-              : busy
-                ? "Importing…"
-                : analyzing
-                  ? "Reading your export…"
-                  : "Drop your Takeout zip here"}
-          </p>
-          <p className="mt-1 text-xs text-neutral-400">
-            {done
-              ? "Taking you to your lists…"
-              : busy
-                ? `Keep this tab open until it finishes${
-                    mode === "fast" ? "" : " — no lookups, so this is quick"
-                  }`
-                : analyzing
-                  ? "Working out what importing it would do — nothing is saved yet"
-                  : "Nothing is imported until you've seen what it would do"}
-          </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!working) setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              if (working) return;
+              const picked = e.dataTransfer.files?.[0];
+              if (picked) analyze({ kind: "upload", file: picked });
+            }}
+            onClick={() => {
+              if (!working) inputRef.current?.click();
+            }}
+            className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
+              working
+                ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
+                : "cursor-pointer border-neutral-300 bg-white hover:bg-neutral-50"
+            } ${dragOver ? "border-rose-400 bg-rose-50" : ""}`}
+          >
+            <p className="text-sm font-medium text-neutral-700">
+              {done
+                ? "Import complete"
+                : busy
+                  ? "Importing…"
+                  : analyzing
+                    ? "Reading your export…"
+                    : "Drop your Takeout zip here"}
+            </p>
+            <p className="mt-1 text-xs text-neutral-400">
+              {done
+                ? "Taking you to your lists…"
+                : busy
+                  ? `Keep this tab open until it finishes${
+                      mode === "fast" ? "" : " — no lookups, so this is quick"
+                    }`
+                  : analyzing
+                    ? "Working out what importing it would do — nothing is saved yet"
+                    : "Nothing is imported until you've seen what it would do"}
+            </p>
+          </div>
+
+          {/* The Drive route sits beside the drop zone, not on another page and
+            not under it: they are two shelves the same export can come off,
+            and everything after the file is chosen — the dry run, the mode
+            buttons, the progress bar — is the same code. */}
+          <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-neutral-300 bg-white px-6 py-12 text-center">
+            {driveConnected ? (
+              <>
+                <button
+                  onClick={pickFromDrive}
+                  disabled={working}
+                  className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  Import from Google Drive
+                </button>
+                <p className="mt-2 text-xs text-neutral-400">
+                  If Takeout delivered your export there, pick it without
+                  downloading it first
+                </p>
+              </>
+            ) : (
+              <>
+                <a
+                  href="/settings"
+                  className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+                >
+                  Connect Google Drive
+                </a>
+                <p className="mt-2 text-xs text-neutral-400">
+                  To import an export Takeout delivered to Drive, without
+                  downloading it
+                </p>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -250,7 +337,7 @@ export default function Uploader() {
         disabled={working}
         onChange={(e) => {
           const picked = e.target.files?.[0];
-          if (picked) analyze(picked);
+          if (picked) analyze({ kind: "upload", file: picked });
           // Reset, so picking the same file again still fires a change event.
           e.target.value = "";
         }}
@@ -259,9 +346,13 @@ export default function Uploader() {
       {analysis && !busy && !done && (
         <AnalysisPanel
           analysis={analysis}
-          fileName={file?.name ?? "your export"}
+          fileName={
+            source?.kind === "upload"
+              ? source.file.name
+              : (source?.name ?? "your export")
+          }
           onImport={(chosen) => {
-            if (file) upload(file, chosen);
+            if (source) upload(source, chosen);
           }}
           onCancel={() => {
             reset();
@@ -315,8 +406,9 @@ export default function Uploader() {
           {result.queued > 0 && (
             <p className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800">
               {result.queued} place{result.queued === 1 ? "" : "s"} queued to be
-              looked up properly. They&rsquo;ll have no pin until that runs — find
-              them under <span className="font-medium">No coordinates</span>.
+              looked up properly. They&rsquo;ll have no pin until that runs —
+              find them under{" "}
+              <span className="font-medium">No coordinates</span>.
             </p>
           )}
           {result.gone > 0 && (
@@ -350,7 +442,8 @@ function AnalysisPanel({
   const t = analysis.totals;
   // Places that would be on the map the moment the import finishes, whichever
   // mode is chosen — the guessed ones included, since a guess still pins.
-  const located = t.exact + t.fromUrl + t.cached + t.cachedGuess + t.unverifiable;
+  const located =
+    t.exact + t.fromUrl + t.cached + t.cachedGuess + t.unverifiable;
   // Positions that are simply right. A cached row mirrored from `place_coords`
   // or from a URL that stated its own position belongs here rather than with
   // the guesses: where it is stored says nothing about how it was found.
@@ -452,7 +545,10 @@ function AnalysisPanel({
         </p>
       </Section>
 
-      <Section title="Dropped" tone={t.gone + t.notPlace > 0 ? "red" : "neutral"}>
+      <Section
+        title="Dropped"
+        tone={t.gone + t.notPlace > 0 ? "red" : "neutral"}
+      >
         {/* Only tinted when something is actually dropped: a red panel saying
             "nothing" reads as a warning about the nothing. */}
         <ul
@@ -485,8 +581,8 @@ function AnalysisPanel({
       </Section>
 
       <p className="mt-3 text-[11px] text-neutral-400">
-        An estimate of right now: the nightly sync could resolve or queue some of
-        these before you confirm.
+        An estimate of right now: the nightly sync could resolve or queue some
+        of these before you confirm.
       </p>
 
       {/* A heavier border than the Dropped panel above, deliberately: both are
@@ -681,7 +777,10 @@ function DeadIdPanel({
   guessed: number;
 }) {
   return (
-    <details className="mt-4 rounded-lg border border-stone-300 bg-stone-50" open>
+    <details
+      className="mt-4 rounded-lg border border-stone-300 bg-stone-50"
+      open
+    >
       <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-100">
         {total.toLocaleString()} place{total === 1 ? "" : "s"} whose Google link
         is dead
@@ -703,9 +802,9 @@ function DeadIdPanel({
             <>
               {" "}
               The {guessed.toLocaleString()} marked{" "}
-              <span className="font-medium text-stone-700">guessed</span> do have
-              a pin, chosen by searching the name — it may be the wrong business,
-              and it will stay that way.
+              <span className="font-medium text-stone-700">guessed</span> do
+              have a pin, chosen by searching the name — it may be the wrong
+              business, and it will stay that way.
             </>
           )}
         </p>
@@ -737,8 +836,7 @@ function DeadIdPanel({
         </ul>
         {total > dead.length && (
           <p className="mt-2 text-[11px] text-stone-400">
-            Showing {dead.length.toLocaleString()} of{" "}
-            {total.toLocaleString()}.
+            Showing {dead.length.toLocaleString()} of {total.toLocaleString()}.
           </p>
         )}
       </div>
@@ -750,7 +848,10 @@ function DeadIdPanel({
 // enough of them that the rows would bury the decision above.
 function ListBreakdown({ lists }: { lists: ListAnalysis[] }) {
   return (
-    <details className="mt-4 rounded-lg border border-neutral-200" open={lists.length <= 8}>
+    <details
+      className="mt-4 rounded-lg border border-neutral-200"
+      open={lists.length <= 8}
+    >
       <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
         Per-list breakdown ({lists.length})
       </summary>
