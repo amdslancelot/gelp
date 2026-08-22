@@ -2,7 +2,7 @@
 
 Gelp is a personal web app for browsing your Google Maps saved lists in a fast three-column UI: your lists on the left, the places of the selected list in the middle, and a map with category-filter chips on the right.
 
-Google offers no API for saved lists, so Gelp imports a **Google Takeout "Saved" export** instead — either uploaded manually on the import page, or synced nightly from a Google Drive folder by a service account. Place categories and coordinates come from the Google Places API and are cached in Postgres, so each place costs **one** Places API call ever, across all re-imports. Google sign-in gates everything.
+Google offers no API for saved lists, so Gelp imports a **Google Takeout "Saved" export** instead — either uploaded manually on the import page, or synced nightly from a Google Drive folder each user connects themselves. Place categories and coordinates come from the Google Places API and are cached in Postgres, so each place costs **one** Places API call ever, across all re-imports. Google sign-in gates everything.
 
 An export identifies each place but gives no coordinates, and a search by title
 sometimes pins the wrong business — so exact positions can also be read off each
@@ -25,13 +25,15 @@ Everything lives in one GCP project (create one at <https://console.cloud.google
 
 1. **OAuth client (sign-in).** APIs & Services → Credentials → Create credentials → OAuth client ID → Web application. Authorized redirect URIs: `http://localhost:3000/api/auth/callback/google` for local dev and `https://<your-host>/api/auth/callback/google` for production. Put the client ID/secret in `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`. Set `ALLOWED_EMAILS` to your own email so only you can sign in.
 2. **Places API key (enrichment).** Enable **Places API (New)**, create an API key restricted to it, and put it in `GOOGLE_MAPS_API_KEY`. It is only used server-side. If it is unset, imports still work — places just stay without coordinates/categories until you re-import with a key.
-3. **Service account (nightly Drive sync, optional).** Create a service account, download its JSON key, and set `GOOGLE_SERVICE_ACCOUNT_KEY_BASE64` to `base64 -w0 key.json` (macOS: `base64 -i key.json`). Create a Drive folder, **share it with the service account's email** (viewer is enough), and put the folder ID (the part after `/folders/` in its URL) in `DRIVE_FOLDER_ID`.
+3. **Drive sync (nightly import, optional).** In the same OAuth client, add `https://<your-host>/api/drive/callback` (and `http://localhost:3000/api/drive/callback` for dev) to the authorized redirect URIs — this is a *second* redirect URI alongside the sign-in one, not a replacement. Enable the **Google Picker API**, create a **browser** API key restricted to it and to your hosts, and put it in `NEXT_PUBLIC_GOOGLE_PICKER_KEY`. Set `DRIVE_TOKEN_KEY` to `openssl rand -base64 32` — it encrypts each user's stored refresh token, and changing or losing it means everyone reconnects.
+
+   The scope requested is `drive.file`, not `drive.readonly`: Gelp sees only the one folder a user hands it through the Picker. That is both less to lose and not one of Google's *restricted* scopes, so no app verification stands between this and a second user.
 
 ## 2. Getting your Takeout export
 
 1. Go to <https://takeout.google.com>, deselect all, select only **Saved** (your Maps saved lists), and export.
 2. **Manual path:** download the zip and upload it on Gelp's `/import` page. The upload is a dry run first: `POST /api/import/analyze` reads the zip and reports what importing it would do — how many places are already known exactly, how many are cached (and how many of those were merely a search's guess), how many would go on the resolve queue, how many Google no longer has an entry for, and which stored lists would be **deleted** — without writing anything or spending an API call. The import only runs when you pick a mode on that summary. The zip is uploaded again at that point rather than held server-side, so nothing has to be stored between the two requests.
-3. **Automatic path:** choose "Add to Drive" as the delivery method (or set up a scheduled export every 2 months) targeting the shared Drive folder from step 1.3. The in-cluster CronJob hits `POST /api/cron/import` nightly at 03:30; the app then pulls the newest `takeout*.zip` from that folder and imports it. You can trigger it manually any time:
+3. **Automatic path:** choose "Add to Drive" as the delivery method (or schedule an export every 2 months) targeting a folder in your own Drive. On Gelp's **Settings** page, press *Connect Google Drive*, then pick that folder — the sync only starts once a folder is picked, because until then Gelp has access to nothing. The in-cluster CronJob hits `POST /api/cron/import` nightly at 03:30, and the app imports the newest `takeout*.zip` from each connected user's folder. A user whose grant is revoked is switched off and told to reconnect on their settings page; everyone else is unaffected. You can trigger the run manually any time:
 
    ```sh
    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<your-host>/api/cron/import

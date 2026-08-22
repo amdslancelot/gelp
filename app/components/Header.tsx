@@ -23,6 +23,12 @@ export default async function Header() {
         >
           Import
         </Link>
+        <Link
+          href="/settings"
+          className="text-sm font-medium text-neutral-600 hover:text-neutral-900"
+        >
+          Settings
+        </Link>
       </div>
       {user && (
         <div className="flex items-center gap-3">

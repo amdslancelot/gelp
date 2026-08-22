@@ -8,25 +8,22 @@ kind: CronJob
 metadata:
   name: gelp-import
 spec:
-  # Ships SUSPENDED, because the endpoint it calls is a no-op until Drive sync
-  # is configured: /api/cron/import returns 503 ("Drive sync is not configured")
-  # unless BOTH GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 and DRIVE_FOLDER_ID are in the
-  # gelp-env Secret. Neither has ever been set in prod, so from the day this
-  # CronJob was deployed it produced one failed Job (3 attempts) every night and
-  # nothing else. Failing nightly is worse than not running: it trains you to
-  # ignore the one signal that would tell you a *configured* import broke.
+  # Runs for real now: /api/cron/import imports for every user who has connected
+  # their own Drive and picked a folder on /settings. With nobody connected it
+  # is a cheap no-op that returns an empty list — not a failure — so an idle
+  # deployment no longer manufactures a failed Job every night.
   #
-  # To enable, on the node: add both variables to /opt/gelp/.env.prod (see
-  # README.md step 3 for how to mint the service-account key and share the Drive
-  # folder), flip this to false, and redeploy — deploy.sh rebuilds the Secret
-  # from .env.prod and re-applies this manifest.
+  # It used to ship suspended because the endpoint 503'd unless both
+  # GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 and DRIVE_FOLDER_ID were set, which they
+  # never were in prod: one failed Job (3 attempts) every night and nothing
+  # else. Failing nightly is worse than not running — it trains you to ignore
+  # the one signal that would tell you a *configured* import broke.
   #
-  # Note this whole single-tenant path (one service account, one folder, imports
-  # for allowedEmails()[0]) is slated for replacement by per-user Drive OAuth —
-  # see TODO.md "Per-user nightly Drive Takeout auto-sync", after which both
-  # variables become obsolete. Enabling now is only worth it if you want the
-  # single-user sync in the meantime.
-  suspend: true
+  # One user's failure does not fail the Job either; it is recorded against that
+  # user and shown on their settings page. So a red Job here means the run
+  # itself could not happen (the app is down, CRON_SECRET is wrong), which is
+  # the only thing worth waking up for.
+  suspend: false
   schedule: "30 3 * * *"
   concurrencyPolicy: Forbid
   jobTemplate:
@@ -40,6 +37,11 @@ spec:
               image: curlimages/curl
               args:
                 - --fail-with-body
+                # The run imports every connected user in one request, so it can
+                # take minutes. Long, but not unbounded: a hung app should fail
+                # the Job rather than hold the schedule's next slot.
+                - --max-time
+                - "1800"
                 - --request
                 - POST
                 - http://gelp/api/cron/import
