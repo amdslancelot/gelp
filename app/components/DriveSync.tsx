@@ -85,6 +85,7 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
   const [done, setDone] = useState<string | null>(null);
 
   const pickerKey = process.env.NEXT_PUBLIC_GOOGLE_PICKER_KEY;
+  const projectNumber = process.env.NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER;
 
   // Open the Picker, and dry-run whatever comes back. Nothing is written: the
   // user sees what importing that export would do — including which stored
@@ -100,6 +101,11 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
           "NEXT_PUBLIC_GOOGLE_PICKER_KEY is not set on this server",
         );
       }
+      if (!projectNumber) {
+        throw new Error(
+          "NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER is not set on this server",
+        );
+      }
 
       const tokenRes = await fetch("/api/drive/picker-token");
       const tokenBody = await readJson(tokenRes);
@@ -113,14 +119,35 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
       await loadPicker();
       const picker = window.google!.picker;
 
-      const view = new picker.DocsView(picker.ViewId.DOCS)
-        .setMimeTypes("application/zip")
-        .setIncludeFolders(true);
+      // Drive labels a zip inconsistently — `application/zip` for some,
+      // `application/x-zip-compressed` or `application/octet-stream` for others
+      // depending on what wrote it — and a Takeout export can arrive as any of
+      // them. Filtering on one of the three hides the file the user came here
+      // for and says "No documents", which reads as "your export is missing".
+      const zipView = new picker.DocsView(picker.ViewId.DOCS)
+        .setMimeTypes(
+          "application/zip,application/x-zip-compressed,application/octet-stream",
+        )
+        .setIncludeFolders(true)
+        .setLabel("Takeout zips");
+
+      // And an unfiltered view behind it, because the cost of a wrong guess
+      // here is a user who cannot proceed at all. Picking a non-zip is
+      // harmless: the server parses it and says it is not a Takeout export.
+      const allView = new picker.DocsView(picker.ViewId.DOCS)
+        .setIncludeFolders(true)
+        .setLabel("All files");
 
       new picker.PickerBuilder()
-        .addView(view)
+        .addView(zipView)
+        .addView(allView)
         .setOAuthToken(accessToken)
         .setDeveloperKey(pickerKey)
+        // Required for `drive.file`, and the whole reason picking works at all:
+        // this is what makes the Picker *grant* the app access to the chosen
+        // file rather than merely hand back its id. Without it every pick looks
+        // fine and every subsequent read is a 404.
+        .setAppId(projectNumber)
         .setTitle("Pick your Takeout .zip")
         .setCallback(async (data: PickerData) => {
           if (data.action === picker.Action.CANCEL) {
