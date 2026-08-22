@@ -48,7 +48,7 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
         <span
           className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
             state.connected
-              ? "bg-green-50 text-green-700"
+              ? "bg-emerald-50 text-emerald-900"
               : "bg-neutral-100 text-neutral-500"
           }`}
         >

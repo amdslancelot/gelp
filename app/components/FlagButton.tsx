@@ -58,7 +58,7 @@ export default function FlagButton({
       title="Queue this place to have its real coordinates looked up"
       className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
         state === "queued"
-          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+          ? "border-emerald-500 bg-emerald-50 text-emerald-900"
           : state === "error"
             ? "border-red-300 bg-red-50 text-red-700"
             : "border-neutral-300 bg-white text-neutral-500 hover:border-amber-400 hover:bg-amber-50 hover:text-amber-700"

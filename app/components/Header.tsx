@@ -13,7 +13,7 @@ export default async function Header() {
       <div className="flex items-center gap-6">
         <Link
           href="/"
-          className="text-xl font-bold tracking-tight text-rose-600"
+          className="text-xl font-bold tracking-tight text-emerald-800"
         >
           Gelp
         </Link>
