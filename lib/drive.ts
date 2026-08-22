@@ -7,7 +7,7 @@ const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 export function isDriveConfigured(): boolean {
   return Boolean(
     process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 &&
-      process.env.DRIVE_FOLDER_ID,
+    process.env.DRIVE_FOLDER_ID,
   );
 }
 
@@ -32,18 +32,17 @@ async function getAccessToken(client: JWT): Promise<string> {
   return token;
 }
 
-// Download the newest Takeout zip from the configured Drive folder and return
-// its bytes. Lists candidate files, ordered newest first, and downloads the
-// first match.
-export async function fetchLatestTakeoutZip(): Promise<Buffer> {
-  const folderId = process.env.DRIVE_FOLDER_ID;
-  if (!folderId) {
-    throw new Error("DRIVE_FOLDER_ID is not set");
-  }
-
-  const client = buildJwtClient();
-  const token = await getAccessToken(client);
-  const authHeader = { Authorization: `Bearer ${token}` };
+// Download the newest Takeout zip from a Drive folder and return its bytes.
+// Lists candidate files, ordered newest first, and downloads the first match.
+//
+// Takes the token and folder as arguments rather than reading the environment,
+// because there is no longer one of either: the nightly sync runs this once per
+// user, with that user's own access token and the folder they picked.
+export async function fetchTakeoutZipFrom(
+  accessToken: string,
+  folderId: string,
+): Promise<Buffer> {
+  const authHeader = { Authorization: `Bearer ${accessToken}` };
 
   const query = [
     `'${folderId}' in parents`,
@@ -79,4 +78,19 @@ export async function fetchLatestTakeoutZip(): Promise<Buffer> {
 
   const arrayBuffer = await downloadRes.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+// The original single-tenant path: one service account reading one folder from
+// the environment.
+//
+// Kept only until the per-user sync has run in production for a while. It is
+// the fallback for a deployment that has the old variables set and nobody
+// connected yet — see TODO.md; both variables go away with it.
+export async function fetchLatestTakeoutZip(): Promise<Buffer> {
+  const folderId = process.env.DRIVE_FOLDER_ID;
+  if (!folderId) {
+    throw new Error("DRIVE_FOLDER_ID is not set");
+  }
+  const token = await getAccessToken(buildJwtClient());
+  return fetchTakeoutZipFrom(token, folderId);
 }

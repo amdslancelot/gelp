@@ -17,6 +17,10 @@ const { auth } = NextAuth(authConfig);
 // follows and reports as a failure to load.
 const PUBLIC_PREFIXES = [
   "/login",
+  // The privacy policy has to be readable before signing in — Google will not
+  // publish an OAuth app whose policy it cannot fetch, and a policy you must
+  // log in to read is not one you can consult before deciding to.
+  "/privacy",
   "/api/health",
   "/api/cron/import",
   "/api/auth",

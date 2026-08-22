@@ -38,6 +38,13 @@ import {
   rotateShare,
 } from "../lib/share";
 import {
+  DecryptError,
+  decryptSecret,
+  encryptSecret,
+  isTokenKeyConfigured,
+  secretEquals,
+} from "../lib/crypto";
+import {
   CATEGORY_GROUPS,
   CATEGORY_TREE,
   TIER1,
@@ -55,6 +62,17 @@ function assert(condition: boolean, message: string) {
   } else {
     console.log(`  FAIL  ${message}`);
     failures.push(message);
+  }
+}
+
+// True when `fn` fails the way an unreadable stored secret must: a DecryptError
+// and nothing else, so a caller can safely narrow on it.
+function throwsDecryptError(fn: () => unknown): boolean {
+  try {
+    fn();
+    return false;
+  } catch (err) {
+    return err instanceof DecryptError;
   }
 }
 
@@ -256,6 +274,54 @@ function baseUrl(): string {
 
 async function main() {
   console.log("Gelp offline self-check\n");
+
+  // 0. Drive refresh-token encryption. Offline and self-contained: the key is
+  // supplied here so the check runs without one in the environment.
+  console.log("Drive token encryption:");
+  const realKey = process.env.DRIVE_TOKEN_KEY;
+  process.env.DRIVE_TOKEN_KEY = Buffer.alloc(32, 7).toString("base64");
+  assert(isTokenKeyConfigured(), "a 32-byte DRIVE_TOKEN_KEY is accepted");
+
+  const token = "1//0e-example-refresh-token";
+  const sealed = encryptSecret(token);
+  assert(decryptSecret(sealed) === token, "refresh token round-trips");
+  assert(!sealed.includes(token), "ciphertext does not contain the plaintext");
+  assert(
+    encryptSecret(token) !== sealed,
+    "encrypting twice gives different ciphertext (fresh IV each time)",
+  );
+
+  // A tampered ciphertext must fail to open rather than yield garbage that the
+  // Drive call would then send to Google.
+  const [iv, tag, ct] = sealed.split(":");
+  const flipped = Buffer.from(ct, "base64");
+  flipped[0] ^= 0xff;
+  assert(
+    throwsDecryptError(() =>
+      decryptSecret(`${iv}:${tag}:${flipped.toString("base64")}`),
+    ),
+    "an altered ciphertext is rejected, not decrypted",
+  );
+
+  // The rotated-away-key case: this is what the nightly sync must survive by
+  // disabling one user rather than aborting the whole run.
+  process.env.DRIVE_TOKEN_KEY = Buffer.alloc(32, 9).toString("base64");
+  assert(
+    throwsDecryptError(() => decryptSecret(sealed)),
+    "a value encrypted under another key raises DecryptError",
+  );
+
+  process.env.DRIVE_TOKEN_KEY = Buffer.alloc(31, 7).toString("base64");
+  assert(!isTokenKeyConfigured(), "a key of the wrong length is refused");
+  if (realKey === undefined) delete process.env.DRIVE_TOKEN_KEY;
+  else process.env.DRIVE_TOKEN_KEY = realKey;
+
+  assert(secretEquals("abc", "abc"), "secretEquals matches equal secrets");
+  assert(!secretEquals("abc", "abd"), "secretEquals rejects a different secret");
+  assert(
+    !secretEquals("abc", "abcd"),
+    "secretEquals rejects a differing length without throwing",
+  );
 
   // 1. Build the fixture.
   const buf = buildFixture();
