@@ -32,18 +32,19 @@ async function getAccessToken(client: JWT): Promise<string> {
   return token;
 }
 
-// Download the newest Takeout zip from a Drive folder and return its bytes.
-// Lists candidate files, ordered newest first, and downloads the first match.
+// One Takeout zip sitting in the folder.
+export type DriveFile = { id: string; name: string; createdTime?: string };
+
+// Every Takeout zip in the folder, newest first.
 //
-// Takes the token and folder as arguments rather than reading the environment,
-// because there is no longer one of either: the nightly sync runs this once per
-// user, with that user's own access token and the folder they picked.
-export async function fetchTakeoutZipFrom(
+// The query is the definition of what this app considers its business in that
+// folder: a zip, named like a Takeout export, not already trashed. Anything
+// else the user keeps there is invisible to Gelp — which matters most for the
+// cleanup below, since what this query cannot see, it cannot trash.
+async function listTakeoutZips(
   accessToken: string,
   folderId: string,
-): Promise<Buffer> {
-  const authHeader = { Authorization: `Bearer ${accessToken}` };
-
+): Promise<DriveFile[]> {
   const query = [
     `'${folderId}' in parents`,
     "name contains 'takeout'",
@@ -54,30 +55,87 @@ export async function fetchTakeoutZipFrom(
   const listUrl = new URL(DRIVE_FILES_URL);
   listUrl.searchParams.set("q", query);
   listUrl.searchParams.set("orderBy", "createdTime desc");
-  listUrl.searchParams.set("pageSize", "1");
+  listUrl.searchParams.set("pageSize", "100");
   listUrl.searchParams.set("fields", "files(id,name,createdTime)");
 
-  const listRes = await fetch(listUrl, { headers: authHeader });
-  if (!listRes.ok) {
-    throw new Error(`Drive list failed: ${listRes.status}`);
+  const res = await fetch(listUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Drive list failed: ${res.status}`);
   }
-  const listData = (await listRes.json()) as {
-    files?: Array<{ id: string; name: string }>;
-  };
-  const file = listData.files?.[0];
+  const data = (await res.json()) as { files?: DriveFile[] };
+  return data.files ?? [];
+}
+
+// Download the newest Takeout zip from a Drive folder.
+//
+// Returns the file's identity alongside its bytes, because a caller that
+// afterwards tidies the folder has to know which one it just imported — the
+// single file that must survive.
+//
+// Takes the token and folder as arguments rather than reading the environment,
+// because there is no longer one of either: the nightly sync runs this once per
+// user, with that user's own access token and the folder they picked.
+export async function fetchTakeoutZipFrom(
+  accessToken: string,
+  folderId: string,
+): Promise<{ buffer: Buffer; file: DriveFile }> {
+  const files = await listTakeoutZips(accessToken, folderId);
+  const file = files[0];
   if (!file) {
     throw new Error("No Takeout zip found in the Drive folder");
   }
 
   const downloadUrl = new URL(`${DRIVE_FILES_URL}/${file.id}`);
   downloadUrl.searchParams.set("alt", "media");
-  const downloadRes = await fetch(downloadUrl, { headers: authHeader });
+  const downloadRes = await fetch(downloadUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
   if (!downloadRes.ok) {
     throw new Error(`Drive download failed: ${downloadRes.status}`);
   }
 
-  const arrayBuffer = await downloadRes.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  return {
+    buffer: Buffer.from(await downloadRes.arrayBuffer()),
+    file,
+  };
+}
+
+// Move every Takeout zip in the folder except `keepFileId` to Drive's trash,
+// and answer how many were moved.
+//
+// Trash, never delete. Trashed files are recoverable for 30 days, which is the
+// difference between an automated tidy-up and an automated way to lose the only
+// copy of an export. This app deletes nothing of the user's permanently.
+//
+// Only ever called after an import has succeeded. The export in that folder is
+// the input to this app, and destroying inputs before knowing the run worked is
+// how a bad night becomes an unrecoverable one.
+export async function trashOlderTakeouts(
+  accessToken: string,
+  folderId: string,
+  keepFileId: string,
+): Promise<number> {
+  const files = await listTakeoutZips(accessToken, folderId);
+  const doomed = files.filter((f) => f.id !== keepFileId);
+
+  let trashed = 0;
+  for (const file of doomed) {
+    const res = await fetch(`${DRIVE_FILES_URL}/${file.id}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ trashed: true }),
+    });
+    // One file refusing to move is not a reason to abandon the rest, and not a
+    // reason to fail an import that has already succeeded. The count reports
+    // what actually happened.
+    if (res.ok) trashed++;
+  }
+  return trashed;
 }
 
 // The original single-tenant path: one service account reading one folder from
@@ -92,5 +150,5 @@ export async function fetchLatestTakeoutZip(): Promise<Buffer> {
     throw new Error("DRIVE_FOLDER_ID is not set");
   }
   const token = await getAccessToken(buildJwtClient());
-  return fetchTakeoutZipFrom(token, folderId);
+  return (await fetchTakeoutZipFrom(token, folderId)).buffer;
 }

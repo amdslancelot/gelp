@@ -68,6 +68,17 @@ export const users = pgTable("users", {
   // reads the CronJob's logs, so a failure that is not written here is a
   // failure nobody learns about.
   driveLastError: text("drive_last_error"),
+
+  // Opt-in: after a successful import, move every *other* Takeout zip in the
+  // folder to Drive's trash, so the folder keeps exactly the newest export.
+  //
+  // Off by default and separate from the sync itself, because it is the only
+  // thing this app does that writes to a user's Drive. Trash, never permanent
+  // deletion — recoverable for 30 days, which is the difference between a
+  // tidy-up and an automated way to lose the only copy of an export.
+  driveTrashOldExports: boolean("drive_trash_old_exports")
+    .notNull()
+    .default(false),
 });
 
 // A named saved list imported from a Takeout export.

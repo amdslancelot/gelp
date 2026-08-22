@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "drive_trash_old_exports" boolean DEFAULT false NOT NULL;

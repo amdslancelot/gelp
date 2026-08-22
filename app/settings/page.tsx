@@ -37,6 +37,7 @@ export default async function SettingsPage({
         folderName: users.driveFolderName,
         lastSyncedAt: users.driveLastSyncedAt,
         lastError: users.driveLastError,
+        trashOldExports: users.driveTrashOldExports,
       })
       .from(users)
       .where(eq(users.id, session.user.id))
@@ -51,6 +52,7 @@ export default async function SettingsPage({
     folderName: row?.folderName ?? null,
     lastSyncedAt: row?.lastSyncedAt ?? null,
     lastError: row?.lastError ?? null,
+    trashOldExports: Boolean(row?.trashOldExports),
   };
 
   const notice = CALLBACK_MESSAGES[(await searchParams).drive ?? ""];

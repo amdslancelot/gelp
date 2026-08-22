@@ -40,6 +40,7 @@ export type DriveState = {
   folderName: string | null;
   lastSyncedAt: number | null;
   lastError: string | null;
+  trashOldExports: boolean;
 };
 
 // Load Google's picker script once and resolve when the picker module is ready.
@@ -69,6 +70,27 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [done, setDone] = useState<string | null>(null);
+
+  // The only setting here that writes to the user's Drive, so it saves on the
+  // click that changed it — no separate Save button to leave it ambiguous
+  // whether the app has been given permission to move their files.
+  async function setTrashOldExports(next: boolean) {
+    setError(null);
+    setState((s) => ({ ...s, trashOldExports: next }));
+    try {
+      const res = await fetch("/api/drive/prefs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trashOldExports: next }),
+      });
+      if (!res.ok) throw new Error("Could not save that setting");
+    } catch (err) {
+      // Put the switch back rather than leaving the page claiming a state the
+      // server does not have.
+      setState((s) => ({ ...s, trashOldExports: !next }));
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    }
+  }
 
   // Ask what importing the newest zip in the folder would do, without writing.
   // Deliberately not one click all the way through: a Takeout export is a
@@ -356,6 +378,23 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
           </dd>
         </div>
       </dl>
+
+      {state.folderName && (
+        <label className="mt-4 flex gap-2 text-sm text-neutral-600">
+          <input
+            type="checkbox"
+            checked={state.trashOldExports}
+            onChange={(e) => setTrashOldExports(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Keep only the newest export — after a successful import, move the
+            older Takeout zips in that folder to Drive&rsquo;s trash. They stay
+            recoverable there for 30 days, and nothing else in the folder is
+            touched.
+          </span>
+        </label>
+      )}
 
       {state.connected && !state.folderName && (
         <p className="mt-3 text-sm text-neutral-500">

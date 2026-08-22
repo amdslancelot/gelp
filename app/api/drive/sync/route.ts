@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { accessTokenFromStored } from "@/lib/drive-oauth";
-import { fetchTakeoutZipFrom } from "@/lib/drive";
+import { fetchTakeoutZipFrom, trashOlderTakeouts } from "@/lib/drive";
 import { parseTakeoutZip } from "@/lib/takeout";
 import { analyzeImport, runImport, type ImportMode } from "@/lib/import";
 import { createPlacesClient } from "@/lib/places";
@@ -31,6 +31,7 @@ export async function POST(req: Request) {
       .select({
         enc: users.driveRefreshTokenEnc,
         folderId: users.driveFolderId,
+        trashOldExports: users.driveTrashOldExports,
       })
       .from(users)
       .where(eq(users.id, session.user.id))
@@ -45,9 +46,11 @@ export async function POST(req: Request) {
   }
 
   let buffer: Buffer;
+  let file: { id: string };
+  let accessToken: string;
   try {
-    const accessToken = await accessTokenFromStored(row.enc);
-    buffer = await fetchTakeoutZipFrom(accessToken, row.folderId);
+    accessToken = await accessTokenFromStored(row.enc);
+    ({ buffer, file } = await fetchTakeoutZipFrom(accessToken, row.folderId));
   } catch (err) {
     return NextResponse.json(
       {
@@ -85,6 +88,17 @@ export async function POST(req: Request) {
     mode,
   );
 
+  // Same order as the nightly job: import first, tidy second, and never let a
+  // folder that failed to tidy report as a failed import.
+  let trashed = 0;
+  if (row.trashOldExports) {
+    try {
+      trashed = await trashOlderTakeouts(accessToken, row.folderId, file.id);
+    } catch {
+      // The import is what mattered and it succeeded.
+    }
+  }
+
   // A manual sync counts as a sync: it is the same import from the same folder,
   // so leaving `last_synced_at` at whatever the CronJob last managed would
   // misreport when this map was last brought up to date.
@@ -93,5 +107,5 @@ export async function POST(req: Request) {
     .set({ driveLastSyncedAt: Date.now(), driveLastError: null })
     .where(eq(users.id, session.user.id));
 
-  return NextResponse.json(result);
+  return NextResponse.json({ ...result, trashed });
 }

@@ -12,6 +12,7 @@ import {
   fetchLatestTakeoutZip,
   fetchTakeoutZipFrom,
   isDriveConfigured,
+  trashOlderTakeouts,
 } from "@/lib/drive";
 import { parseTakeoutZip } from "@/lib/takeout";
 import { runImport } from "@/lib/import";
@@ -68,7 +69,7 @@ export async function POST(req: Request) {
       const accessToken = await accessTokenFromStored(
         user.driveRefreshTokenEnc!,
       );
-      const buffer = await fetchTakeoutZipFrom(
+      const { buffer, file } = await fetchTakeoutZipFrom(
         accessToken,
         user.driveFolderId!,
       );
@@ -80,6 +81,19 @@ export async function POST(req: Request) {
         "drive",
         UNATTENDED_MODE,
       );
+
+      // Only now, with the import committed. Tidying the folder before knowing
+      // the run worked is how a bad night becomes an unrecoverable one — and a
+      // folder that fails to tidy is not a failed sync, so this cannot throw
+      // into the catch below and mark the user's map as broken.
+      if (user.driveTrashOldExports) {
+        try {
+          await trashOlderTakeouts(accessToken, user.driveFolderId!, file.id);
+        } catch {
+          // The import is what mattered and it succeeded.
+        }
+      }
+
       await db
         .update(users)
         .set({ driveLastSyncedAt: Date.now(), driveLastError: null })
