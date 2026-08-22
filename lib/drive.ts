@@ -32,6 +32,17 @@ async function getAccessToken(client: JWT): Promise<string> {
   return token;
 }
 
+// Google's own words for why a Drive call failed, which are the only useful
+// part of it — "403" alone cannot distinguish an API nobody enabled from a file
+// this app was never given. Falls back to the status when there is no message.
+async function describeDriveError(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as {
+    error?: { message?: string };
+  } | null;
+  const message = body?.error?.message;
+  return message ? `${res.status} — ${message}` : `HTTP ${res.status}`;
+}
+
 // One Takeout zip sitting in the folder.
 export type DriveFile = { id: string; name: string; createdTime?: string };
 
@@ -62,7 +73,7 @@ async function listTakeoutZips(
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) {
-    throw new Error(`Drive list failed: ${res.status}`);
+    throw new Error(`Drive list failed: ${await describeDriveError(res)}`);
   }
   const data = (await res.json()) as { files?: DriveFile[] };
   return data.files ?? [];
@@ -93,7 +104,9 @@ export async function fetchTakeoutZipFrom(
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!downloadRes.ok) {
-    throw new Error(`Drive download failed: ${downloadRes.status}`);
+    throw new Error(
+      `Drive download failed: ${await describeDriveError(downloadRes)}`,
+    );
   }
 
   return {
