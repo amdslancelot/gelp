@@ -24,6 +24,23 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
+# Values Next.js inlines into the client bundle at build time.
+#
+# `NEXT_PUBLIC_*` variables are not read at runtime: `npm run build` substitutes
+# them into the JavaScript that ships to the browser, and whatever is in the
+# gelp-env Secret afterwards cannot change what was already compiled. Since
+# .dockerignore excludes `.env*` from the build context — deliberately, so no
+# secret is ever baked into an image — they have to arrive as build args
+# instead. deploy.sh reads them out of .env.prod and passes them here.
+#
+# Both are public by design: one is a browser API key restricted in the Google
+# console, the other a project number that appears in Google's own error
+# messages. Nothing secret belongs in this mechanism.
+ARG NEXT_PUBLIC_GOOGLE_PICKER_KEY
+ARG NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER
+ENV NEXT_PUBLIC_GOOGLE_PICKER_KEY=$NEXT_PUBLIC_GOOGLE_PICKER_KEY
+ENV NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER=$NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER
+
 # Copy the rest of the source and build the standalone output.
 COPY . .
 RUN npm run build
