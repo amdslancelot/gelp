@@ -247,84 +247,85 @@ export default function Uploader({
   return (
     <div>
       {showDropZone && (
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!working) setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            if (working) return;
-            const picked = e.dataTransfer.files?.[0];
-            if (picked) analyze({ kind: "upload", file: picked });
-          }}
-          onClick={() => {
-            if (!working) inputRef.current?.click();
-          }}
-          className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
-            working
-              ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
-              : "cursor-pointer border-neutral-300 bg-white hover:bg-neutral-50"
-          } ${dragOver ? "border-rose-400 bg-rose-50" : ""}`}
-        >
-          <p className="text-sm font-medium text-neutral-700">
-            {done
-              ? "Import complete"
-              : busy
-                ? "Importing…"
-                : analyzing
-                  ? "Reading your export…"
-                  : "Drop your Takeout zip here"}
-          </p>
-          <p className="mt-1 text-xs text-neutral-400">
-            {done
-              ? "Taking you to your lists…"
-              : busy
-                ? `Keep this tab open until it finishes${
-                    mode === "fast" ? "" : " — no lookups, so this is quick"
-                  }`
-                : analyzing
-                  ? "Working out what importing it would do — nothing is saved yet"
-                  : "Nothing is imported until you've seen what it would do"}
-          </p>
-        </div>
-      )}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!working) setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              if (working) return;
+              const picked = e.dataTransfer.files?.[0];
+              if (picked) analyze({ kind: "upload", file: picked });
+            }}
+            onClick={() => {
+              if (!working) inputRef.current?.click();
+            }}
+            className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
+              working
+                ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
+                : "cursor-pointer border-neutral-300 bg-white hover:bg-neutral-50"
+            } ${dragOver ? "border-rose-400 bg-rose-50" : ""}`}
+          >
+            <p className="text-sm font-medium text-neutral-700">
+              {done
+                ? "Import complete"
+                : busy
+                  ? "Importing…"
+                  : analyzing
+                    ? "Reading your export…"
+                    : "Drop your Takeout zip here"}
+            </p>
+            <p className="mt-1 text-xs text-neutral-400">
+              {done
+                ? "Taking you to your lists…"
+                : busy
+                  ? `Keep this tab open until it finishes${
+                      mode === "fast" ? "" : " — no lookups, so this is quick"
+                    }`
+                  : analyzing
+                    ? "Working out what importing it would do — nothing is saved yet"
+                    : "Nothing is imported until you've seen what it would do"}
+            </p>
+          </div>
 
-      {/* The Drive route sits beside the drop zone rather than on another page:
-          it is the same import from a different shelf, and everything after the
-          file is chosen — the dry run, the mode buttons, the progress bar — is
-          the same code. */}
-      {showDropZone && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          {driveConnected ? (
-            <>
-              <button
-                onClick={pickFromDrive}
-                disabled={working}
-                className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
-              >
-                Import from Google Drive
-              </button>
-              <span className="text-xs text-neutral-400">
-                if Takeout delivered your export there
-              </span>
-            </>
-          ) : (
-            <>
-              <a
-                href="/settings"
-                className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-neutral-700 hover:bg-neutral-50"
-              >
-                Connect Google Drive
-              </a>
-              <span className="text-xs text-neutral-400">
-                to import an export Takeout delivered to Drive, without
-                downloading it
-              </span>
-            </>
-          )}
+          {/* The Drive route sits beside the drop zone, not on another page and
+            not under it: they are two shelves the same export can come off,
+            and everything after the file is chosen — the dry run, the mode
+            buttons, the progress bar — is the same code. */}
+          <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-neutral-300 bg-white px-6 py-12 text-center">
+            {driveConnected ? (
+              <>
+                <button
+                  onClick={pickFromDrive}
+                  disabled={working}
+                  className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  Import from Google Drive
+                </button>
+                <p className="mt-2 text-xs text-neutral-400">
+                  If Takeout delivered your export there, pick it without
+                  downloading it first
+                </p>
+              </>
+            ) : (
+              <>
+                <a
+                  href="/settings"
+                  className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+                >
+                  Connect Google Drive
+                </a>
+                <p className="mt-2 text-xs text-neutral-400">
+                  To import an export Takeout delivered to Drive, without
+                  downloading it
+                </p>
+              </>
+            )}
+          </div>
         </div>
       )}
 
