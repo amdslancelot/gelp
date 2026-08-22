@@ -90,19 +90,45 @@ export async function POST(req: Request) {
   // Same default as everywhere else: "queued" guesses at nothing and bills
   // nothing, and a caller that wants an answer right now has to say so.
   const mode: ImportMode = params.get("mode") === "fast" ? "fast" : "queued";
-  const result = await runImport(
-    db,
-    session.user.id,
-    parsed,
-    createPlacesClient(),
-    "drive",
-    mode,
-  );
 
-  await db
-    .update(users)
-    .set({ driveLastSyncedAt: Date.now(), driveLastError: null })
-    .where(eq(users.id, session.user.id));
+  // Streamed as newline-delimited JSON in exactly the shape /api/import/upload
+  // uses, so the import page drives one progress bar for both sources. An
+  // import is the same work whether the zip came off a disk or out of Drive;
+  // only the first few lines of these two routes differ.
+  const encoder = new TextEncoder();
+  const userId = session.user.id;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) =>
+        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      try {
+        const result = await runImport(
+          db,
+          userId,
+          parsed,
+          createPlacesClient(),
+          "drive",
+          mode,
+          (p) => send({ type: "progress", ...p }),
+        );
+        await db
+          .update(users)
+          .set({ driveLastSyncedAt: Date.now(), driveLastError: null })
+          .where(eq(users.id, userId));
+        send({ type: "done", result });
+      } catch {
+        send({ type: "error", error: "Import failed" });
+      } finally {
+        controller.close();
+      }
+    },
+  });
 
-  return NextResponse.json(result);
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

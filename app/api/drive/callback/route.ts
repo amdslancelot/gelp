@@ -13,8 +13,11 @@ export const dynamic = "force-dynamic";
 // settings page can say what happened. The code never renders anything itself:
 // this is a redirect target for a browser, not an API for the app's own fetches.
 function back(reason: string): NextResponse {
+  // Straight to the import page on success: connecting is a means, and the
+  // thing the user came to do is one click further on. Failures go back to
+  // settings, where the connect button they just pressed still is.
   const url = new URL(
-    "/settings",
+    reason === "connected" ? "/import" : "/settings",
     process.env.AUTH_URL ?? "http://localhost:3000",
   );
   url.searchParams.set("drive", reason);

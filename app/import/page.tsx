@@ -1,5 +1,8 @@
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
+import { getDb } from "@/lib/db";
+import { users } from "@/lib/db/schema";
 import { loadQueueSummary } from "@/lib/queries";
 import Header from "../components/Header";
 import Uploader from "../components/Uploader";
@@ -19,17 +22,40 @@ function ago(ms: number): string {
 }
 
 // Upload page for manually importing a Takeout export.
-export default async function ImportPage() {
+export default async function ImportPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ drive?: string }>;
+}) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
   const queue = await loadQueueSummary();
+
+  // Whether this user has a Drive grant stored. Only ever a boolean past this
+  // line — the token itself never leaves the server.
+  const justConnected = (await searchParams).drive === "connected";
+
+  const db = await getDb();
+  const driveRow = (
+    await db
+      .select({ enc: users.driveRefreshTokenEnc })
+      .from(users)
+      .where(eq(users.id, session.user.id))
+      .limit(1)
+  )[0];
 
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
       <main className="mx-auto w-full max-w-2xl px-4 py-10">
         <h1 className="mb-1 text-xl font-semibold">Import saved lists</h1>
+        {justConnected && (
+          <p className="mb-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+            Google Drive connected. Use{" "}
+            <strong>Import from Google Drive</strong> below to pick your export.
+          </p>
+        )}
         <p className="mb-4 text-sm text-neutral-500">
           Upload the <code className="text-neutral-700">.zip</code> from Google
           Takeout. It is read and summarised first — how much is already known,
@@ -70,7 +96,7 @@ export default async function ImportPage() {
             Leave everything else unchecked for a smaller, faster export.
           </p>
         </div>
-        <Uploader />
+        <Uploader driveConnected={Boolean(driveRow?.enc)} />
 
         {/* What is waiting to be resolved. Shown here because this is where a
             queued import sends its work, and because a queue nobody drains
@@ -79,8 +105,8 @@ export default async function ImportPage() {
         {queue.pending > 0 && (
           <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-medium text-amber-900">
-              {queue.pending} place{queue.pending === 1 ? "" : "s"} waiting to be
-              looked up
+              {queue.pending} place{queue.pending === 1 ? "" : "s"} waiting to
+              be looked up
             </p>
             <p className="mt-1 text-xs leading-relaxed text-amber-800/80">
               {queue.fromImport > 0 && (
@@ -90,9 +116,7 @@ export default async function ImportPage() {
                 </>
               )}
               {queue.flagged > 0 && (
-                <>
-                  {queue.flagged} reported as wrongly pinned.{" "}
-                </>
+                <>{queue.flagged} reported as wrongly pinned. </>
               )}
               They have no pin until a resolve run reads their real coordinates,
               which is a manual step.
