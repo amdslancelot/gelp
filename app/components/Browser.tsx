@@ -417,7 +417,7 @@ export default function Browser({
             onClick={() => setMobileTab("list")}
             className={`rounded-md px-3 py-1 ${
               mobileTab === "list"
-                ? "bg-rose-500 text-white"
+                ? "bg-emerald-500 text-white"
                 : "text-neutral-600"
             }`}
           >
@@ -426,7 +426,7 @@ export default function Browser({
           <button
             onClick={() => setMobileTab("map")}
             className={`rounded-md px-3 py-1 ${
-              mobileTab === "map" ? "bg-rose-500 text-white" : "text-neutral-600"
+              mobileTab === "map" ? "bg-emerald-500 text-white" : "text-neutral-600"
             }`}
           >
             Map
@@ -482,7 +482,7 @@ export default function Browser({
             aria-pressed={filterToView}
             className={`ml-2 shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
               filterToView
-                ? "border-rose-500 bg-rose-500 text-white"
+                ? "border-emerald-500 bg-emerald-500 text-white"
                 : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
             }`}
           >
@@ -601,7 +601,7 @@ export default function Browser({
                       was and the list is a record of what was saved. Saying so
                       is the whole fix: nothing else about the row differs. */}
                   {p.closed && (
-                    <div className="mt-0.5 text-xs font-medium text-rose-600">
+                    <div className="mt-0.5 text-xs font-medium text-emerald-600">
                       {p.closed === "permanently"
                         ? "Permanently closed"
                         : "Temporarily closed"}
@@ -638,7 +638,7 @@ export default function Browser({
                   setLoadError(null);
                   setReloadTick((t) => t + 1);
                 }}
-                className="font-medium text-rose-600 underline"
+                className="font-medium text-emerald-600 underline"
               >
                 Retry
               </button>
@@ -744,7 +744,7 @@ function ListItems({
                 selected
                   ? built
                     ? "bg-amber-50 font-medium text-amber-800"
-                    : "bg-rose-50 font-medium text-rose-700"
+                    : "bg-emerald-50 font-medium text-emerald-700"
                   : built
                     ? "text-amber-700 hover:bg-amber-50"
                     : "text-neutral-700 hover:bg-neutral-50"
@@ -790,13 +790,13 @@ function Chip({
       onClick={onClick}
       className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition ${
         active
-          ? "border-rose-500 bg-rose-500 text-white"
+          ? "border-emerald-500 bg-emerald-500 text-white"
           : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
       }`}
     >
       {label}
       {count !== undefined && (
-        <span className={active ? "ml-1.5 text-rose-100" : "ml-1.5 text-neutral-400"}>
+        <span className={active ? "ml-1.5 text-emerald-100" : "ml-1.5 text-neutral-400"}>
           {count}
         </span>
       )}

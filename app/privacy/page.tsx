@@ -14,7 +14,7 @@ export const metadata = { title: "Privacy — Gelp" };
 export default function PrivacyPage() {
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-12">
-      <Link href="/" className="text-xl font-bold tracking-tight text-rose-600">
+      <Link href="/" className="text-xl font-bold tracking-tight text-emerald-600">
         Gelp
       </Link>
       <h1 className="mt-6 text-2xl font-semibold">Privacy</h1>

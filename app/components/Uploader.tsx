@@ -268,7 +268,7 @@ export default function Uploader({
               working
                 ? "cursor-not-allowed border-neutral-200 bg-neutral-50"
                 : "cursor-pointer border-neutral-300 bg-white hover:bg-neutral-50"
-            } ${dragOver ? "border-rose-400 bg-rose-50" : ""}`}
+            } ${dragOver ? "border-emerald-400 bg-emerald-50" : ""}`}
           >
             <p className="text-sm font-medium text-neutral-700">
               {done
@@ -365,7 +365,7 @@ export default function Uploader({
         <div className="mt-4">
           <div className="h-2 w-full overflow-hidden rounded-full bg-neutral-200">
             <div
-              className="h-full rounded-full bg-rose-500 transition-all duration-300 ease-out"
+              className="h-full rounded-full bg-emerald-500 transition-all duration-300 ease-out"
               style={{ width: `${done ? 100 : pct}%` }}
             />
           </div>
@@ -931,20 +931,20 @@ function ModeButton({
       onClick={onClick}
       className={`rounded-xl border px-4 py-3 text-left transition ${
         emphasis
-          ? "border-rose-300 bg-rose-50 hover:bg-rose-100"
+          ? "border-emerald-300 bg-emerald-50 hover:bg-emerald-100"
           : "border-neutral-300 bg-white hover:bg-neutral-50"
       }`}
     >
       <div
         className={`text-sm font-semibold ${
-          emphasis ? "text-rose-800" : "text-neutral-800"
+          emphasis ? "text-emerald-800" : "text-neutral-800"
         }`}
       >
         {title}
       </div>
       <div
         className={`mt-1 text-xs leading-relaxed ${
-          emphasis ? "text-rose-700/80" : "text-neutral-500"
+          emphasis ? "text-emerald-700/80" : "text-neutral-500"
         }`}
       >
         {detail}

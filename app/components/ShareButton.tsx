@@ -127,7 +127,7 @@ export default function ShareButton() {
               <button
                 onClick={() => call("POST")}
                 disabled={busy}
-                className="mt-3 w-full rounded-md bg-rose-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-600 disabled:opacity-50"
+                className="mt-3 w-full rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
               >
                 {busy ? "Creating…" : "Create link"}
               </button>
@@ -145,7 +145,7 @@ export default function ShareButton() {
                 />
                 <button
                   onClick={copy}
-                  className="shrink-0 rounded-md bg-rose-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-rose-600"
+                  className="shrink-0 rounded-md bg-emerald-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-600"
                 >
                   {copied ? "Copied" : "Copy"}
                 </button>

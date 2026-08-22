@@ -12,7 +12,7 @@ export default async function LoginPage() {
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-sm rounded-2xl border border-neutral-200 bg-white p-8 shadow-sm">
         <div className="mb-6 flex items-center gap-2">
-          <span className="text-2xl font-bold tracking-tight text-rose-600">
+          <span className="text-2xl font-bold tracking-tight text-emerald-600">
             Gelp
           </span>
         </div>

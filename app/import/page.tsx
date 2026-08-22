@@ -51,7 +51,7 @@ export default async function ImportPage({
       <main className="mx-auto w-full max-w-2xl px-4 py-10">
         <h1 className="mb-1 text-xl font-semibold">Import saved lists</h1>
         {justConnected && (
-          <p className="mb-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+          <p className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
             Google Drive connected. Use{" "}
             <strong>Import from Google Drive</strong> below to pick your export.
           </p>
