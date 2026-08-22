@@ -55,6 +55,10 @@ export default function Uploader({
   const [busy, setBusy] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Shown when the picker is closed without a file. Not an error — the common
+  // reason is that Takeout has not delivered yet, and the picker cannot say
+  // which it was, so the copy names the likely cause instead of guessing.
+  const [pickerEmpty, setPickerEmpty] = useState(false);
   const [source, setSource] = useState<Source | null>(null);
   const [analysis, setAnalysis] = useState<ImportAnalysis | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -123,9 +127,13 @@ export default function Uploader({
   const pickFromDrive = useCallback(async () => {
     if (busyRef.current) return;
     setError(null);
+    setPickerEmpty(false);
     try {
       const doc = await pickDriveZip();
-      if (!doc) return;
+      if (!doc) {
+        setPickerEmpty(true);
+        return;
+      }
       await analyze({
         kind: "drive",
         fileId: doc.id,
@@ -310,6 +318,13 @@ export default function Uploader({
                   If Takeout delivered your export there, pick it without
                   downloading it first
                 </p>
+                {pickerEmpty && (
+                  <p className="mt-3 max-w-xs text-xs leading-relaxed text-neutral-500">
+                    No Takeout zip yet? An export takes hours to days to build.
+                    Google emails you when it is ready — come back and press
+                    this again then.
+                  </p>
+                )}
               </>
             ) : (
               <>

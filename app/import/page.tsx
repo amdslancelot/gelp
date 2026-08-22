@@ -64,8 +64,21 @@ export default async function ImportPage({
           cost nothing.
         </p>
         <div className="mb-6 rounded-lg border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600">
+          {/* Google offers no way to start a Takeout export from another app,
+              so this is a link and a checklist rather than a button. Saying
+              exactly which boxes to tick is the value: Takeout names these
+              products inconsistently, and the wrong ones produce an export
+              that imports to nothing — discovered only hours later. */}
           <p className="font-medium text-neutral-800">
-            In Google Takeout, include these products:
+            <a
+              href="https://takeout.google.com/settings/takeout"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-emerald-700 underline underline-offset-2 hover:text-emerald-800"
+            >
+              Open Google Takeout
+            </a>
+            , press <strong>Deselect all</strong>, then include these products:
           </p>
           <ul className="mt-2 space-y-1">
             <li className="flex gap-2">
@@ -95,6 +108,16 @@ export default async function ImportPage({
           <p className="mt-3 text-xs text-neutral-400">
             Leave everything else unchecked for a smaller, faster export.
           </p>
+          {/* The completion signal. Nothing here can poll for it — Takeout has
+              no status API, and `drive.file` reaches only files this app has
+              already been handed — so the email is the signal, and saying so
+              is the difference between waiting and wondering. */}
+          <p className="mt-3 border-t border-neutral-100 pt-3 text-sm text-neutral-600">
+            Takeout emails you when the export is ready — it can take hours or
+            days. Once that email arrives, come back and press{" "}
+            <strong className="text-neutral-800">Import from Google Drive</strong>{" "}
+            below.
+          </p>
         </div>
         <Uploader driveConnected={Boolean(driveRow?.enc)} />
 
@@ -109,17 +132,21 @@ export default async function ImportPage({
               be looked up
             </p>
             <p className="mt-1 text-xs leading-relaxed text-amber-800/80">
-              {queue.fromImport > 0 && (
+              {queue.pending} place{queue.pending === 1 ? "" : "s"} in the
+              queue currently waiting for the next coordinates resolve run
+              {/* The split, only when there is one. A place a user reported as
+                  wrongly pinned is a complaint, not merely work not done yet,
+                  and that difference is invisible in the total — but with no
+                  flags the two halves are the total, and restating it in
+                  brackets says nothing. */}
+              {queue.flagged > 0 && (
                 <>
-                  {queue.fromImport} from imports
-                  {queue.flagged > 0 ? ", " : ". "}
+                  {" "}
+                  ({queue.fromImport} from imports, {queue.flagged} reported as
+                  wrongly pinned)
                 </>
               )}
-              {queue.flagged > 0 && (
-                <>{queue.flagged} reported as wrongly pinned. </>
-              )}
-              They have no pin until a resolve run reads their real coordinates,
-              which is a manual step.
+              .
               {queue.oldestAt !== null && (
                 <> Oldest queued {ago(queue.oldestAt)}.</>
               )}
@@ -148,12 +175,6 @@ export default async function ImportPage({
             </p>
           </div>
         )}
-
-        <p className="mt-6 rounded-lg bg-neutral-100 px-4 py-3 text-sm text-neutral-600">
-          A nightly Drive sync also imports the newest Takeout zip
-          automatically, so manual uploads are only needed when you want an
-          update sooner.
-        </p>
       </main>
     </div>
   );
