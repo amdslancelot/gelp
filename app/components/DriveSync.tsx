@@ -194,10 +194,56 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
         Import from Drive
       </h2>
       <p className="mt-1 text-sm text-neutral-500">
-        If your Takeout export went to Google Drive, import it from there
-        instead of downloading it first. Gelp sees only the file you pick —
-        nothing else in your Drive, and nothing you have not handed it.
+        Have Takeout deliver your export to Drive, then import it from there —
+        no downloading, no uploading. Gelp sees only the file you pick, nothing
+        else in your Drive.
       </p>
+
+      {/* Google offers no way to start a Takeout export from another app, so
+          this is a link and a checklist rather than a button that does it.
+          Saying exactly which boxes to tick is the whole value: the products
+          are named inconsistently in Takeout's own list, and picking the wrong
+          ones produces an export that imports to nothing. */}
+      <ol className="mt-4 space-y-2 text-sm text-neutral-600">
+        <li className="flex gap-2">
+          <span className="text-neutral-400">1.</span>
+          <span>
+            <a
+              href="https://takeout.google.com/settings/takeout"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-rose-600 underline underline-offset-2"
+            >
+              Open Google Takeout
+            </a>{" "}
+            and press <strong>Deselect all</strong>.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span className="text-neutral-400">2.</span>
+          <span>
+            Tick <strong>Maps (your places)</strong>, <strong>My Maps</strong>,
+            and <strong>Saved</strong> — the last one is your lists. Leave
+            everything else off for a smaller export.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span className="text-neutral-400">3.</span>
+          <span>
+            For delivery, choose <strong>Add to Drive</strong>, then create the
+            export. Google takes a while — minutes to hours — and emails you
+            when the zip has landed in your Drive.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span className="text-neutral-400">4.</span>
+          <span>
+            Come back and press <strong>Sync from Drive</strong> below. Pick
+            that zip, and Gelp will show you what importing it would change
+            before writing anything.
+          </span>
+        </li>
+      </ol>
 
       {state.lastError && (
         <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
