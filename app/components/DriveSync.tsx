@@ -9,14 +9,10 @@ type PickerDoc = { id: string; name?: string };
 type PickerData = { action: string; docs?: PickerDoc[] };
 declare global {
   interface Window {
-    gapi?: {
-      load: (name: string, cb: () => void) => void;
-    };
+    gapi?: { load: (name: string, cb: () => void) => void };
     google?: {
-      picker: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        [key: string]: any;
-      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      picker: { [key: string]: any };
     };
   }
 }
@@ -24,28 +20,27 @@ declare global {
 const PICKER_SCRIPT = "https://apis.google.com/js/api.js";
 
 // The parts of an import dry run this panel shows. The upload page renders the
-// full breakdown; here the question is narrower — is the export in that folder
-// current enough to import — so it shows the size of the change and, above all,
-// what would be deleted.
+// full breakdown; here the question is narrower — is this export current enough
+// to import — so it shows the size of the change and, above all, what would be
+// deleted.
 type SyncPreview = {
+  fileName: string;
+  fileId: string;
   places: number;
-  lists: { name: string; status: "new" | "replace" }[];
+  lists: unknown[];
   removed: { name: string; places: number }[];
   emptyExport: boolean;
 };
 
 export type DriveState = {
   connected: boolean;
-  enabled: boolean;
-  folderName: string | null;
   lastSyncedAt: number | null;
   lastError: string | null;
-  trashOldExports: boolean;
 };
 
 // Load Google's picker script once and resolve when the picker module is ready.
-// Called on click rather than on mount: a settings page visit that never picks
-// a folder should not fetch a third-party script.
+// Called on click rather than on mount: a settings page visit that never syncs
+// should not fetch a third-party script.
 function loadPicker(): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = () => window.gapi!.load("picker", () => resolve());
@@ -58,12 +53,14 @@ function loadPicker(): Promise<void> {
   });
 }
 
-// The settings control for the nightly Drive sync.
+// The settings control for importing straight from Drive.
 //
-// Three states, in order: not connected, connected but no folder yet, and
-// syncing. They are steps rather than options — under `drive.file` a grant
-// reaches nothing until the user picks a folder, so "connected" on its own is
-// deliberately not a working state and the UI says so.
+// Deliberately a button rather than a schedule. The `drive.file` scope shows
+// this app only the file its owner picks for it, which is what keeps it out of
+// Google's verification process — and also what makes an unattended sync
+// impossible: next month's export is a file nobody has picked yet. Since taking
+// a Takeout export is itself something you do by hand, pressing sync afterwards
+// is the next step of the same act.
 export default function DriveSync({ initial }: { initial: DriveState }) {
   const [state, setState] = useState(initial);
   const [busy, setBusy] = useState(false);
@@ -71,75 +68,15 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
-  // The only setting here that writes to the user's Drive, so it saves on the
-  // click that changed it — no separate Save button to leave it ambiguous
-  // whether the app has been given permission to move their files.
-  async function setTrashOldExports(next: boolean) {
-    setError(null);
-    setState((s) => ({ ...s, trashOldExports: next }));
-    try {
-      const res = await fetch("/api/drive/prefs", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trashOldExports: next }),
-      });
-      if (!res.ok) throw new Error("Could not save that setting");
-    } catch (err) {
-      // Put the switch back rather than leaving the page claiming a state the
-      // server does not have.
-      setState((s) => ({ ...s, trashOldExports: !next }));
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    }
-  }
+  const pickerKey = process.env.NEXT_PUBLIC_GOOGLE_PICKER_KEY;
 
-  // Ask what importing the newest zip in the folder would do, without writing.
-  // Deliberately not one click all the way through: a Takeout export is a
-  // complete snapshot, so importing a stale one deletes every list saved since
-  // it was taken, and only the user knows whether the export is current.
-  async function checkForUpdate() {
+  // Open the Picker, and dry-run whatever comes back. Nothing is written: the
+  // user sees what importing that export would do — including which stored
+  // lists it would delete — and decides.
+  async function pickAndPreview() {
     setError(null);
     setDone(null);
     setPreview(null);
-    setBusy(true);
-    try {
-      const res = await fetch("/api/drive/sync?dryRun=1", { method: "POST" });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Could not read the folder");
-      setPreview({
-        places: body.places,
-        lists: body.lists,
-        removed: body.removed,
-        emptyExport: body.emptyExport,
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // Import for real, now that the user has seen what it would do.
-  async function importNow() {
-    setError(null);
-    setBusy(true);
-    try {
-      const res = await fetch("/api/drive/sync", { method: "POST" });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "The import failed");
-      setPreview(null);
-      setDone("Imported. Your lists are up to date.");
-      setState((s) => ({ ...s, lastSyncedAt: Date.now(), lastError: null }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const pickerKey = process.env.NEXT_PUBLIC_GOOGLE_PICKER_KEY;
-
-  async function pickFolder() {
-    setError(null);
     setBusy(true);
     try {
       if (!pickerKey) {
@@ -162,41 +99,73 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
       await loadPicker();
       const picker = window.google!.picker;
 
-      const view = new picker.DocsView(picker.ViewId.FOLDERS)
-        .setSelectFolderEnabled(true)
-        .setIncludeFolders(true)
-        .setMimeTypes("application/vnd.google-apps.folder");
+      const view = new picker.DocsView(picker.ViewId.DOCS)
+        .setMimeTypes("application/zip")
+        .setIncludeFolders(true);
 
       new picker.PickerBuilder()
         .addView(view)
         .setOAuthToken(accessToken)
         .setDeveloperKey(pickerKey)
-        .setTitle("Pick the folder your Takeout exports go to")
+        .setTitle("Pick your Takeout .zip")
         .setCallback(async (data: PickerData) => {
-          if (data.action !== picker.Action.PICKED) return;
-          const doc = data.docs?.[0];
-          if (!doc) return;
-          const res = await fetch("/api/drive/folder", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ folderId: doc.id, folderName: doc.name }),
-          });
-          if (!res.ok) {
-            const body = (await res.json().catch(() => ({}))) as {
-              error?: string;
-            };
-            setError(body.error ?? "Could not save the folder");
+          if (data.action === picker.Action.CANCEL) {
+            setBusy(false);
             return;
           }
-          setState((s) => ({
-            ...s,
-            enabled: true,
-            folderName: doc.name ?? "Selected folder",
-            lastError: null,
-          }));
+          if (data.action !== picker.Action.PICKED) return;
+          const doc = data.docs?.[0];
+          if (!doc) return setBusy(false);
+
+          setBusy(true);
+          try {
+            const res = await fetch("/api/drive/sync?dryRun=1", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileId: doc.id }),
+            });
+            const body = await res.json();
+            if (!res.ok) throw new Error(body.error ?? "Could not read it");
+            setPreview({
+              fileName: doc.name ?? "the picked file",
+              fileId: doc.id,
+              places: body.places,
+              lists: body.lists,
+              removed: body.removed,
+              emptyExport: body.emptyExport,
+            });
+          } catch (err) {
+            setError(
+              err instanceof Error ? err.message : "Something went wrong",
+            );
+          } finally {
+            setBusy(false);
+          }
         })
         .build()
         .setVisible(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setBusy(false);
+    }
+  }
+
+  // Import for real, now that the user has seen what it would do.
+  async function importNow() {
+    if (!preview) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/drive/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileId: preview.fileId }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "The import failed");
+      setPreview(null);
+      setDone("Imported. Your lists are up to date.");
+      setState((s) => ({ ...s, lastSyncedAt: Date.now(), lastError: null }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -210,13 +179,8 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
     try {
       const res = await fetch("/api/drive/disconnect", { method: "DELETE" });
       if (!res.ok) throw new Error("Could not disconnect");
-      setState((s) => ({
-        ...s,
-        connected: false,
-        enabled: false,
-        folderName: null,
-        lastError: null,
-      }));
+      setPreview(null);
+      setState((s) => ({ ...s, connected: false, lastError: null }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -226,27 +190,14 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white px-4 py-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-sm font-medium text-neutral-900">
-            Nightly Drive sync
-          </h2>
-          <p className="mt-1 text-sm text-neutral-500">
-            Point Gelp at the Drive folder your Google Takeout exports land in,
-            and it imports the newest one every night. Gelp only ever sees the
-            folder you pick here — nothing else in your Drive.
-          </p>
-        </div>
-        <span
-          className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
-            state.enabled
-              ? "bg-green-50 text-green-700"
-              : "bg-neutral-100 text-neutral-500"
-          }`}
-        >
-          {state.enabled ? "On" : "Off"}
-        </span>
-      </div>
+      <h2 className="text-sm font-medium text-neutral-900">
+        Import from Drive
+      </h2>
+      <p className="mt-1 text-sm text-neutral-500">
+        If your Takeout export went to Google Drive, import it from there
+        instead of downloading it first. Gelp sees only the file you pick —
+        nothing else in your Drive, and nothing you have not handed it.
+      </p>
 
       {state.lastError && (
         <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -256,6 +207,11 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
       {error && (
         <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
+        </p>
+      )}
+      {done && (
+        <p className="mt-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+          {done}
         </p>
       )}
 
@@ -270,21 +226,12 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
         ) : (
           <>
             <button
-              onClick={pickFolder}
+              onClick={pickAndPreview}
               disabled={busy}
               className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
             >
-              {state.folderName ? "Change folder" : "Pick the Takeout folder"}
+              {busy ? "Working…" : "Sync from Drive"}
             </button>
-            {state.folderName && (
-              <button
-                onClick={checkForUpdate}
-                disabled={busy}
-                className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
-              >
-                {busy ? "Checking…" : "Sync now"}
-              </button>
-            )}
             <button
               onClick={disconnect}
               disabled={busy}
@@ -296,24 +243,18 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
         )}
       </div>
 
-      {done && (
-        <p className="mt-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
-          {done}
-        </p>
-      )}
-
       {preview && (
         <div className="mt-3 rounded border border-neutral-200 bg-neutral-50 px-3 py-3 text-sm">
+          <p className="text-neutral-500">{preview.fileName}</p>
           {preview.emptyExport ? (
-            <p className="text-amber-800">
+            <p className="mt-1 text-amber-800">
               That zip contains no lists at all — far more likely a broken
               download than an emptied account. Nothing would be imported and
               nothing deleted.
             </p>
           ) : (
             <>
-              <p className="text-neutral-700">
-                The newest export in that folder has{" "}
+              <p className="mt-1 text-neutral-700">
                 <strong>{preview.places.toLocaleString()}</strong> places across{" "}
                 <strong>{preview.lists.length}</strong> lists.
               </p>
@@ -362,15 +303,9 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
         </div>
       )}
 
-      <dl className="mt-4 space-y-1 text-sm text-neutral-500">
-        {state.folderName && (
-          <div className="flex gap-2">
-            <dt className="text-neutral-400">Folder</dt>
-            <dd className="text-neutral-700">{state.folderName}</dd>
-          </div>
-        )}
+      <dl className="mt-4 text-sm text-neutral-500">
         <div className="flex gap-2">
-          <dt className="text-neutral-400">Last synced</dt>
+          <dt className="text-neutral-400">Last imported from Drive</dt>
           <dd className="text-neutral-700">
             {state.lastSyncedAt
               ? new Date(state.lastSyncedAt).toLocaleString()
@@ -378,30 +313,6 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
           </dd>
         </div>
       </dl>
-
-      {state.folderName && (
-        <label className="mt-4 flex gap-2 text-sm text-neutral-600">
-          <input
-            type="checkbox"
-            checked={state.trashOldExports}
-            onChange={(e) => setTrashOldExports(e.target.checked)}
-            className="mt-0.5"
-          />
-          <span>
-            Keep only the newest export — after a successful import, move the
-            older Takeout zips in that folder to Drive&rsquo;s trash. They stay
-            recoverable there for 30 days, and nothing else in the folder is
-            touched.
-          </span>
-        </label>
-      )}
-
-      {state.connected && !state.folderName && (
-        <p className="mt-3 text-sm text-neutral-500">
-          Connected, but not syncing yet — pick the folder to finish. Gelp gets
-          access to that folder only, which is why this step cannot be skipped.
-        </p>
-      )}
     </div>
   );
 }

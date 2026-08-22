@@ -42,13 +42,7 @@ export async function DELETE() {
 
   await db
     .update(users)
-    .set({
-      driveSyncEnabled: false,
-      driveRefreshTokenEnc: null,
-      driveFolderId: null,
-      driveFolderName: null,
-      driveLastError: null,
-    })
+    .set({ driveRefreshTokenEnc: null, driveLastError: null })
     .where(eq(users.id, session.user.id));
 
   // `driveLastSyncedAt` deliberately survives: it is a record of what happened,

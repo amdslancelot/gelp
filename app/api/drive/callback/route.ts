@@ -61,10 +61,10 @@ export async function GET(req: Request) {
     return back("exchange_failed");
   }
 
-  // Store the grant — but do NOT enable the sync yet. Under `drive.file` a
-  // token on its own reaches nothing: the user still has to hand over a folder
-  // through the Picker, and a sync enabled before that would run every night
-  // with nowhere to look. Enabling is the folder step's job.
+  // Store the grant. It reaches no files by itself — under `drive.file` the
+  // Picker is what hands over a file, one at a time — so this is only what lets
+  // the Picker be opened later without another trip through Google's consent
+  // screen.
   const db = await getDb();
   await db
     .update(users)

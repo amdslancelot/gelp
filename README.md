@@ -2,7 +2,7 @@
 
 Gelp is a personal web app for browsing your Google Maps saved lists in a fast three-column UI: your lists on the left, the places of the selected list in the middle, and a map with category-filter chips on the right.
 
-Google offers no API for saved lists, so Gelp imports a **Google Takeout "Saved" export** instead — either uploaded manually on the import page, or synced nightly from a Google Drive folder each user connects themselves. Place categories and coordinates come from the Google Places API and are cached in Postgres, so each place costs **one** Places API call ever, across all re-imports. Google sign-in gates everything.
+Google offers no API for saved lists, so Gelp imports a **Google Takeout "Saved" export** instead — either uploaded manually on the import page, or pulled straight out of Google Drive by whoever owns it. Place categories and coordinates come from the Google Places API and are cached in Postgres, so each place costs **one** Places API call ever, across all re-imports. Google sign-in gates everything.
 
 An export identifies each place but gives no coordinates, and a search by title
 sometimes pins the wrong business — so exact positions can also be read off each
@@ -33,11 +33,9 @@ Everything lives in one GCP project (create one at <https://console.cloud.google
 
 1. Go to <https://takeout.google.com>, deselect all, select only **Saved** (your Maps saved lists), and export.
 2. **Manual path:** download the zip and upload it on Gelp's `/import` page. The upload is a dry run first: `POST /api/import/analyze` reads the zip and reports what importing it would do — how many places are already known exactly, how many are cached (and how many of those were merely a search's guess), how many would go on the resolve queue, how many Google no longer has an entry for, and which stored lists would be **deleted** — without writing anything or spending an API call. The import only runs when you pick a mode on that summary. The zip is uploaded again at that point rather than held server-side, so nothing has to be stored between the two requests.
-3. **Automatic path:** choose "Add to Drive" as the delivery method (or schedule an export every 2 months) targeting a folder in your own Drive. On Gelp's **Settings** page, press *Connect Google Drive*, then pick that folder — the sync only starts once a folder is picked, because until then Gelp has access to nothing. The in-cluster CronJob hits `POST /api/cron/import` nightly at 03:30, and the app imports the newest `takeout*.zip` from each connected user's folder. A user whose grant is revoked is switched off and told to reconnect on their settings page; everyone else is unaffected. Settings also has a **Sync now** button — the same import, asked for rather than waited for, and shown as a dry run first because a stale export deletes the lists saved since it was taken. An optional switch there keeps the folder holding only the newest export, moving the older zips to Drive's trash (recoverable for 30 days) after an import succeeds; it is off by default, being the only thing Gelp writes to a user's Drive. You can trigger the run manually any time:
+3. **From Drive:** if you had Takeout deliver to Drive, connect it once on Gelp's **Settings** page and press *Sync from Drive*. Google's own file picker opens, you point at the `.zip`, and Gelp reads what you picked — a dry run first, exactly like an upload, so you see what would be imported and which stored lists would be deleted before anything is written.
 
-   ```sh
-   curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<your-host>/api/cron/import
-   ```
+   The scope is `drive.file`, which is **per-file**: Gelp can read the file you hand it and nothing else in your Drive. That is also why this is a button rather than a nightly job — next month's export is a file nobody has picked yet, so no unattended run could find it. Taking a Takeout export is a manual act anyway; pressing sync afterwards is the next step of the same one.
 
 Re-imports are idempotent: a list is identified by its name within an account
 (`lists` is unique on `(user_id, name)`), so re-importing replaces its places

@@ -39,14 +39,16 @@ deployed but these two variables are not in the `gelp-env` Secret yet, so
 
 - [ ] Add `DRIVE_TOKEN_KEY` (`openssl rand -base64 32`) and
       `NEXT_PUBLIC_GOOGLE_PICKER_KEY` to `/opt/gelp/.env.prod`, then redeploy so
-      `deploy.sh` rebuilds the Secret.
+      `deploy.sh` rebuilds the Secret. Drop the now-unused
+      `GOOGLE_SERVICE_ACCOUNT_KEY_BASE64`, `DRIVE_FOLDER_ID` and `CRON_SECRET`
+      from that file while there.
 - [ ] Add `https://gelp.lans-h.cc/api/drive/callback` to the prod OAuth client's
       redirect URIs.
 - [ ] Publish the OAuth app (Google Auth Platform → Audience → Publish app).
       Blocked until Branding carries the home page and privacy policy URLs —
       `/privacy` ships in this branch for exactly that. Publishing matters: a
-      refresh token issued while the app is in Testing expires after 7 days, and
-      that is the credential the nightly sync runs on.
+      refresh token issued while the app is in Testing expires after 7 days, so
+      an unpublished app means re-connecting Drive every week.
 
 ## Housekeeping
 
@@ -58,20 +60,26 @@ deployed but these two variables are not in the `gelp-env` Secret yet, so
 
 ## Features
 
-- [x] **Per-user nightly Drive Takeout auto-sync.** Shipped on
-      `feat/per-user-drive-sync`. Each user connects their own Drive on
-      `/settings` (incremental OAuth, `drive.file` scope) and picks the Takeout
-      folder through the Google Picker; the nightly CronJob loops over everyone
-      who has, with each user isolated so one revoked grant cannot stall the
-      rest. Refresh tokens are encrypted at rest with `DRIVE_TOKEN_KEY`.
-      Remaining:
-      - [ ] End-to-end test against a real Drive folder (needs
-            `NEXT_PUBLIC_GOOGLE_PICKER_KEY` + the second redirect URI in the
-            Google console).
-      - [ ] Once it has run in prod for a while, delete the single-tenant
-            fallback in `app/api/cron/import/route.ts` (`legacyImport`) and with
-            it `GOOGLE_SERVICE_ACCOUNT_KEY_BASE64`, `DRIVE_FOLDER_ID`,
-            `isDriveConfigured`, and `fetchLatestTakeoutZip`.
+- [x] **Import straight from Drive.** Shipped on `feat/per-user-drive-sync`.
+      Connect once on `/settings`, then *Sync from Drive* opens the Google
+      Picker, dry-runs the zip you point at, and imports it on confirmation.
+      Refresh tokens are encrypted at rest with `DRIVE_TOKEN_KEY`.
+
+      **The nightly auto-sync this started as is not possible and was removed.**
+      `drive.file` is per-file by design — an app sees what its owner explicitly
+      picks and nothing else, which is exactly why it needs no Google security
+      review. A Takeout export generated next month is a file nobody has picked,
+      so no unattended job can reach it. Verified empirically: after picking a
+      folder, `files.list` returned nothing at all, not even the folder's
+      contents. The alternatives were `drive.readonly` (restricted scope: CASA
+      security assessment to publish, or 7-day refresh tokens while in Testing)
+      or a service account each user shares a folder with (works, but adds a
+      robot account and a manual sharing step). Neither was worth it against a
+      button pressed after an export you took by hand anyway.
+
+      Removed with it: the `/api/cron/import` endpoint, the CronJob manifest,
+      the service-account path, and `GOOGLE_SERVICE_ACCOUNT_KEY_BASE64` /
+      `DRIVE_FOLDER_ID` / `CRON_SECRET`.
 
 ## Deferred — not gelp's to own
 
