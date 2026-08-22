@@ -514,7 +514,13 @@ export interface ImportAnalysis {
   // Lists that would be deleted, because a Takeout export is a complete
   // snapshot and anything missing from it was deleted in Google Maps.
   removed: RemovedList[];
+  // Counted over *distinct* places, not over the export's rows: a place saved
+  // to three lists is one thing to resolve, so counting it three times would
+  // overstate the work this screen exists to describe. `lists[].buckets` is
+  // the per-list view and is not deduplicated.
   totals: PlaceBuckets;
+  // Distinct places in the export, on the same footing as `totals` so the
+  // buckets sum to it.
   places: number;
   // A queued import would add this many queue entries: the unknown places,
   // deduplicated by URL, since the queue is unique on it.
@@ -592,6 +598,13 @@ export async function analyzeImport(
   // rather than places: the queue is unique on URL, and the cache on key.
   const queueUrls = new Set<string>();
   const lookupKeys = new Set<string>();
+  // The same dedup, applied to the totals themselves. A place saved to three
+  // lists is one place to resolve, one queue row and one cache entry — so
+  // counting it three times overstates every figure the confirm screen exists
+  // to give, and puts `alreadyQueued` visibly out of step with the queue count
+  // on the import page, which is unique on URL. Identified the way the writes
+  // identify it: by URL where there is one, by cache key otherwise.
+  const countedPlaces = new Set<string>();
   // Every dead-id place, gathered by URL so the same dead link saved to three
   // lists reads as one problem in three places rather than three problems.
   const dead = new Map<string, DeadPlace>();
@@ -600,8 +613,14 @@ export async function analyzeImport(
     const buckets = emptyBuckets();
     for (const place of list.places) {
       const bucket = bucketFor(place);
+      // Per-list counts stay per-list: a list really does hold this many
+      // places, and the same place appearing in two lists is two rows to
+      // write. Only the totals collapse to distinct places.
       buckets[bucket] += 1;
-      totals[bucket] += 1;
+      if (!countedPlaces.has(place.mapsUrl ?? cacheKeyFor(place))) {
+        countedPlaces.add(place.mapsUrl ?? cacheKeyFor(place));
+        totals[bucket] += 1;
+      }
 
       // A place with no Maps URL cannot be queued — there is no page to open —
       // so a queued import simply leaves it alone.
@@ -654,7 +673,10 @@ export async function analyzeImport(
     lists: analysed,
     removed,
     totals,
-    places: all.length,
+    // Distinct places, matching `totals` — the confirm screen sums the buckets
+    // and checks them against this, so the two have to be counted the same way.
+    // The per-list rows below still show each list's own place count.
+    places: countedPlaces.size,
     wouldQueue: queueUrls.size,
     wouldCallApi: lookupKeys.size,
     dead: deadList.slice(0, DEAD_LIST_LIMIT),
