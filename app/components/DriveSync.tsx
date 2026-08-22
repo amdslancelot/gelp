@@ -119,14 +119,14 @@ export default function DriveSync({ initial }: { initial: DriveState }) {
       await loadPicker();
       const picker = window.google!.picker;
 
-      // Drive labels a zip inconsistently — `application/zip` for some,
-      // `application/x-zip-compressed` or `application/octet-stream` for others
-      // depending on what wrote it — and a Takeout export can arrive as any of
-      // them. Filtering on one of the three hides the file the user came here
-      // for and says "No documents", which reads as "your export is missing".
+      // Drive labels a zip inconsistently — a Takeout export lands as
+      // `application/x-zip` in practice, but `application/zip`,
+      // `application/x-zip-compressed` and `application/octet-stream` all occur
+      // depending on what wrote the file. Miss the right one and the Picker
+      // says "No documents", which reads as "your export is missing".
       const zipView = new picker.DocsView(picker.ViewId.DOCS)
         .setMimeTypes(
-          "application/zip,application/x-zip-compressed,application/octet-stream",
+          "application/x-zip,application/zip,application/x-zip-compressed,application/octet-stream",
         )
         .setIncludeFolders(true)
         .setLabel("Takeout zips");
