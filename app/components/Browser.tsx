@@ -387,13 +387,15 @@ export default function Browser({
     setFocus(null);
     setDrawerOpen(false);
     setShowAllRows(false);
-    // Drop the stale viewport so the new list shows all its places immediately;
-    // the map re-fits to the new markers and reports fresh bounds a beat later.
-    setMapBounds(null);
+    // The viewport is deliberately kept. Switching lists is a question about
+    // the area already on screen — "what does my Bakery list have around
+    // here" — so the map neither moves nor forgets where it is looking, and
+    // the new list arrives already narrowed to it.
   };
 
-  // Tapping a place focuses it and, on mobile, flips to the map so the pin is
-  // visible without a second tap. On desktop the map is always on screen.
+  // Tapping a place marks its pin out on the map where it already is — the
+  // viewport does not move. On mobile it also flips to the map so the pin is
+  // visible without a second tap; on desktop the map is always on screen.
   const selectPlace = (p: PlaceView) => {
     setFocus(p);
     setMobileTab("map");
@@ -672,16 +674,15 @@ export default function Browser({
           mobileTab === "list" ? "hidden" : "block"
         }`}
       >
-        {/* Only the list frames the map. Narrowing by category is a question
-            about what is on screen now — "which of these are cafes" — so
-            re-framing to the filtered set's global extent would answer a
-            different one, and throw away the area the user zoomed to. */}
+        {/* Nothing here re-frames the map after its first fit — not switching
+            lists, not filtering, not picking a place. Every one of those is a
+            question about the area already on screen, and moving the viewport
+            would answer a different one. */}
         <MapView
           places={visiblePlaces}
           focus={focus}
           onBoundsChange={handleBoundsChange}
           location={location}
-          frameKey={selectedListId ?? ""}
         />
       </section>
 

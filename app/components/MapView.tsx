@@ -44,17 +44,12 @@ const icon = L.icon({
 
 interface MapViewProps {
   places: PlaceView[];
-  // The place to pan/zoom to, if any.
+  // The place picked in the list, if any. It is marked out on the map where it
+  // already is — the viewport does not move to it.
   focus: PlaceView | null;
   // Called whenever the viewport settles (pan/zoom end), so the parent can
   // narrow the list to places within view. Optional.
   onBoundsChange?: (bounds: MapBounds) => void;
-  // What the current framing is *for* — the list and category filter being
-  // shown. The map re-frames when this changes and not merely when `places`
-  // does, because places also changes when the rest of a list arrives behind
-  // the near-me set, and re-fitting there would yank the map from the street
-  // the user is standing on out to the whole world.
-  frameKey: string;
   // Where the user is. Owned by the parent because the first fetch is aimed at
   // it — see `use-my-location`.
   location: MyLocation;
@@ -70,70 +65,48 @@ function googleMapsUrlFor(place: PlaceView): string | null {
   return null;
 }
 
-// Keep the map framed to the visible markers, and pan to a focused place.
-// Framing is deferred until the container has a real size: on mobile the map
-// lives in a display:none pane until the Map tab is shown, and everything
-// Leaflet derives from a 0×0 container — the zoom that fits a set of points,
-// the visible bounds — is arithmetic on nothing. What it produces there is not
-// merely imprecise; a zero width makes the fit fall back to the tile layer's
-// max zoom over a center that ignores the aspect ratio it was never given.
+// Frame the map once, to the first set of markers it is given. Framing is
+// deferred until the container has a real size: on mobile the map lives in a
+// display:none pane until the Map tab is shown, and everything Leaflet derives
+// from a 0×0 container — the zoom that fits a set of points, the visible
+// bounds — is arithmetic on nothing. What it produces there is not merely
+// imprecise; a zero width makes the fit fall back to the tile layer's max zoom
+// over a center that ignores the aspect ratio it was never given.
+//
+// After that first fit the viewport belongs to the user. Neither switching
+// lists, nor filtering by category, nor tapping a place moves it: the question
+// being asked is "which of what I can see is in this list", and re-framing
+// would answer a different one — it would throw away the area the user
+// travelled to in order to show a list's global extent, or one place's street.
 function MapController({
   places,
-  focus,
   visible,
-  frameKey,
 }: {
   places: PlaceView[];
-  focus: PlaceView | null;
   visible: boolean;
-  frameKey: string;
 }) {
   const map = useMap();
-  // What the map was last framed for. A pane being revealed is not a reason to
-  // re-frame — that would throw away the pan the user made before they left it.
-  // Only a change of `frameKey` — the list being shown — or of focus is, so a
-  // reveal re-frames exactly when the change arrived while the pane was hidden
-  // and could not be acted on. Filtering the places within a list deliberately
-  // does not re-frame: the user is asking which of what they can see matches,
-  // not to be flown to the matches' global extent.
-  const framedFor = useRef<{
-    frameKey: string;
-    focus: PlaceView | null;
-    // How many places that framing had to work with. Zero means it framed
-    // nothing at all — the user is nowhere near this list, and the near-me
-    // fetch came back empty — so the arrival of the rest is the first real
-    // chance to frame and must be taken.
-    count: number;
-  }>(null);
+  // Whether the one framing has happened. Framing with nothing to frame does
+  // not count: the near-me fetch can come back empty when the user is nowhere
+  // near the list, and the arrival of the rest is then the first real chance.
+  const framed = useRef(false);
 
   useEffect(() => {
     if (!visible) return;
     // Re-measure: the pane may have just been revealed, and Leaflet still holds
     // the size it had while hidden.
     map.invalidateSize();
-    if (
-      framedFor.current?.frameKey === frameKey &&
-      framedFor.current?.focus === focus &&
-      framedFor.current.count > 0
-    ) {
-      return;
-    }
-    framedFor.current = { frameKey, focus, count: places.length };
-    if (focus && Number.isFinite(focus.lat) && Number.isFinite(focus.lng)) {
-      map.flyTo([focus.lat as number, focus.lng as number], 16, {
-        duration: 0.6,
-      });
-      return;
-    }
+    if (framed.current) return;
     const withCoords = places.filter(
       (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng),
     );
     if (withCoords.length === 0) return;
+    framed.current = true;
     const bounds = L.latLngBounds(
       withCoords.map((p) => [p.lat as number, p.lng as number]),
     );
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
-  }, [map, places, focus, visible, frameKey]);
+  }, [map, places, visible]);
 
   return null;
 }
@@ -269,6 +242,68 @@ function PlaceMarkers({ places }: { places: PlaceView[] }) {
   );
 }
 
+// The place picked in the list, drawn again on top of the cluster layer with a
+// ring around it and its popup already open. Drawn separately because the pin
+// for it is very often not on screen as a pin at all: the clusterer swallows it
+// into a bubble, and the map deliberately does not zoom in to break that bubble
+// apart. This marker is outside the group, so it is always the one pin the user
+// can see — wherever the map happens to be pointed.
+function FocusMarker({ place }: { place: PlaceView | null }) {
+  const ref = useRef<L.Marker>(null);
+  const lat = place?.lat;
+  const lng = place?.lng;
+
+  useEffect(() => {
+    ref.current?.openPopup();
+  }, [place]);
+
+  if (!place || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const pos: [number, number] = [lat as number, lng as number];
+  const mapsUrl = googleMapsUrlFor(place);
+
+  return (
+    <>
+      <CircleMarker
+        center={pos}
+        radius={16}
+        pathOptions={{
+          color: "#16a34a",
+          weight: 3,
+          fillColor: "#16a34a",
+          fillOpacity: 0.2,
+        }}
+      />
+      <Marker ref={ref} position={pos} icon={icon} zIndexOffset={1000}>
+        <Popup>
+          {mapsUrl ? (
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block cursor-pointer no-underline"
+            >
+              <strong>{place.title}</strong>
+              {place.address && (
+                <div className="text-gray-600">{place.address}</div>
+              )}
+              <div className="mt-1 text-xs font-medium text-blue-600">
+                Open in Google Maps ↗
+              </div>
+            </a>
+          ) : (
+            <>
+              <strong>{place.title}</strong>
+              {place.address && (
+                <div className="text-gray-600">{place.address}</div>
+              )}
+            </>
+          )}
+        </Popup>
+      </Marker>
+    </>
+  );
+}
+
 // Fly to the current location whenever the "My location" button is pressed
 // (tracked by an incrementing tick), so the dot is brought into view even when
 // it lies outside the area framed to the saved places.
@@ -292,7 +327,6 @@ export default function MapView({
   focus,
   onBoundsChange,
   location,
-  frameKey,
 }: MapViewProps) {
   const {
     pos: myPos,
@@ -332,12 +366,8 @@ export default function MapView({
             <Popup>{overridden ? "Showing places near here" : "You are here"}</Popup>
           </CircleMarker>
         )}
-        <MapController
-          places={places}
-          focus={focus}
-          visible={visible}
-          frameKey={frameKey}
-        />
+        <FocusMarker place={focus} />
+        <MapController places={places} visible={visible} />
         <FlyToLocation pos={myPos} tick={flyTick} />
         <BoundsReporter onBoundsChange={onBoundsChange} />
         <InvalidateOnResize onVisibilityChange={setVisible} />
