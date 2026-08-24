@@ -69,6 +69,18 @@ interface Tomb {
   settledUrl: string | null;
 }
 
+// The columns of an existing place_coords row that decide whether an incoming
+// line would change anything.
+interface PlaceCoordsRow {
+  cid: string | null;
+  mapsUrl: string;
+  lat: number;
+  lng: number;
+  address: string | null;
+  category: string | null;
+  closed: string | null;
+}
+
 // One row ready for place_coords.
 interface Row {
   // Null for a place saved as bare coordinates: there is no Google place behind
@@ -326,6 +338,54 @@ async function main() {
       }
     }
 
+    // The scraper's output file is append-only — it is its own resume log, so
+    // every past run's lines are still in it and every run re-reads all of
+    // them. Reporting over all of that answers "what is in the file", which
+    // nobody asked; the question is what this load changes. So from here on the
+    // summary is over `fresh`: the rows place_coords does not already hold with
+    // these exact values.
+    const settled = new Map<string, PlaceCoordsRow>();
+    for (let i = 0; i < keys.length; i += 500) {
+      const found = await db
+        .select({
+          cid: placeCoords.cid,
+          mapsUrl: placeCoords.mapsUrl,
+          lat: placeCoords.lat,
+          lng: placeCoords.lng,
+          address: placeCoords.address,
+          category: placeCoords.category,
+          closed: placeCoords.closed,
+        })
+        .from(placeCoords)
+        .where(inArray(placeCoords.mapsUrl, keys.slice(i, i + 500)));
+      for (const row of found) {
+        settled.set(row.mapsUrl, row);
+        if (row.cid) settled.set(`cid:${row.cid}`, row);
+      }
+    }
+    // A row's identity here is the same as the upsert's: its CID when it has
+    // one, its URL when it does not.
+    const fresh = rows.filter((r) => {
+      const had = r.cid ? settled.get(`cid:${r.cid}`) : settled.get(r.mapsUrl);
+      if (!had) return true;
+      // A hair's-width difference is float round-tripping, not a correction.
+      if (Math.abs(had.lat - r.lat) > 1e-9) return true;
+      if (Math.abs(had.lng - r.lng) > 1e-9) return true;
+      // Null incoming means "not observed" and coalesces to the stored value,
+      // so it is not a change; a different non-null value is.
+      if (r.address !== null && r.address !== had.address) return true;
+      if (r.category !== null && r.category !== had.category) return true;
+      if (r.closed !== null && r.closed !== had.closed) return true;
+      return false;
+    });
+    if (fresh.length < rows.length) {
+      console.log(
+        `\n${rows.length - fresh.length} of the ${rows.length} lines are ` +
+          `already loaded exactly as they are — the rest of this summary is ` +
+          `the ${fresh.length} that would change something`,
+      );
+    }
+
     // What the scraped categories would do to the filter list. A category that
     // already exists merges; one that does not becomes a new entry, and a near
     // miss ("bar_and_grill" against an existing "bar") splits one group into
@@ -333,7 +393,7 @@ async function main() {
     // from different places and only a reader can say whether a new name is a
     // real distinction or a duplicate.
     const scraped = new Set(
-      rows.map((r) => r.category).filter((c): c is string => Boolean(c)),
+      fresh.map((r) => r.category).filter((c): c is string => Boolean(c)),
     );
     if (scraped.size > 0) {
       const existing = new Set(
@@ -356,11 +416,11 @@ async function main() {
       }
     }
 
-    const addresses = rows.filter((r) => r.address !== null).length;
+    const addresses = fresh.filter((r) => r.address !== null).length;
     if (addresses > 0) {
       console.log(`\n${addresses} addresses read off the page`);
     }
-    const shut = rows.filter((r) => r.closed !== null).length;
+    const shut = fresh.filter((r) => r.closed !== null).length;
     if (shut > 0) {
       console.log(`${shut} places have closed`);
     }
