@@ -64,6 +64,22 @@ export const ALL_PLACES_LIST_NAME = "All Places";
 export const UNLOCATED_LIST_ID = "__unlocated__";
 export const UNLOCATED_LIST_NAME = "No coordinates";
 
+// The id of the built-in list of places whose pin was chosen by searching the
+// title, rather than read off the place's own map page. Assembled like the
+// other two, so it too has a reserved id.
+//
+// These are the pins most likely to be wrong, and they are the ones hardest to
+// notice: a guessed pin looks exactly like a correct one, and sits plausibly in
+// the right city on a business with a similar name. The row already carries a
+// "Guessed" badge, but only if the user happens to scroll past it — this list
+// is the same set gathered somewhere it can be worked through.
+//
+// Above "No coordinates" because it is the milder problem of the two: a guessed
+// place is on the map and merely might be wrong, while an unlocated one is not
+// there at all.
+export const GUESSED_LIST_ID = "__guessed__";
+export const GUESSED_LIST_NAME = "Guessed";
+
 // Why a place has no position, which decides what the user can do about it.
 //
 //   queued    — waiting for a resolve run; nothing to do but wait

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import {
+  GUESSED_LIST_ID,
   UNLOCATED_LIST_ID,
   unlocatedReason,
   type ListSummary,
@@ -262,6 +263,9 @@ export default function Browser({
   // The built-in "No coordinates" list is, by definition, nowhere on the map,
   // so narrowing it to the viewport would always empty it.
   const isUnlocated = selectedListId === UNLOCATED_LIST_ID;
+  // Unlike the unlocated list, everything here is on the map, so the viewport
+  // filter applies to it exactly as it does to a real list.
+  const isGuessed = selectedListId === GUESSED_LIST_ID;
 
   // The selected list narrowed to the map's current viewport — the set the user
   // can actually see. Until the map reports its first bounds this is everything,
@@ -542,6 +546,14 @@ export default function Browser({
           mobileTab === "map" ? "hidden" : "flex"
         }`}
       >
+        {isGuessed && (
+          <p className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs leading-relaxed text-amber-800">
+            These pins were chosen by searching the name, not read off each
+            place&rsquo;s own map page — so one may be a different business that
+            happens to be called the same thing. Check a pin, and use{" "}
+            <span className="font-medium">Wrong spot?</span> on any that is off.
+          </p>
+        )}
         {isUnlocated && (
           <p className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs leading-relaxed text-amber-800">
             These places have no position, so they are on no map. The ones
@@ -734,16 +746,31 @@ function ListItems({
   selectedListId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const firstBuiltIn = lists.findIndex(
+    (l) => l.id === GUESSED_LIST_ID || l.id === UNLOCATED_LIST_ID,
+  );
+
   return (
     <ul className="pb-4">
       {lists.map((list) => {
-        // The built-in list of places with no position. Marked out because it
-        // is not one of the user's own lists and is a to-do, not a place to
-        // browse — it should read as something to deal with.
-        const built = list.id === UNLOCATED_LIST_ID;
+        // The built-in to-do lists: pins that may be wrong, and places that
+        // have no pin at all. Marked out because neither is one of the user's
+        // own lists and neither is a place to browse — they should read as
+        // something to deal with.
+        const built =
+          list.id === GUESSED_LIST_ID || list.id === UNLOCATED_LIST_ID;
+        // The rule above them is drawn once, on whichever comes first, so the
+        // two read as one block rather than two separated sections.
+        const opensBuiltIns =
+          built && lists.findIndex((l) => l.id === list.id) === firstBuiltIn;
         const selected = list.id === selectedListId;
         return (
-          <li key={list.id} className={built ? "mt-2 border-t border-neutral-200 pt-2" : ""}>
+          <li
+            key={list.id}
+            className={
+              opensBuiltIns ? "mt-2 border-t border-neutral-200 pt-2" : ""
+            }
+          >
             <button
               onClick={() => onSelect(list.id)}
               className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm ${

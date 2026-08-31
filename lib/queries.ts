@@ -13,6 +13,8 @@ import { queueSummary, type QueueSummary } from "./import";
 import {
   ALL_PLACES_LIST_ID,
   ALL_PLACES_LIST_NAME,
+  GUESSED_LIST_ID,
+  GUESSED_LIST_NAME,
   UNLOCATED_LIST_ID,
   UNLOCATED_LIST_NAME,
   type ListSummary,
@@ -27,6 +29,8 @@ export type { PlaceView, ListSummary } from "./place-view";
 export {
   ALL_PLACES_LIST_ID,
   ALL_PLACES_LIST_NAME,
+  GUESSED_LIST_ID,
+  GUESSED_LIST_NAME,
   UNLOCATED_LIST_ID,
   UNLOCATED_LIST_NAME,
   unlocatedReason,
@@ -111,6 +115,17 @@ const hasNoPosition = sql`${places.notAPlace}
 // place and put it in both or neither. `not_a_place` is NOT NULL, so this
 // cannot go three-valued.
 const hasPosition = sql`not (${hasNoPosition})`;
+
+// True where a place is on the map but only because a text search put it there.
+//
+// Kept in step with the `resolver` column above, which is the same three-way
+// decision: `not_a_place` and a `place_coords` row both win over the cache, so
+// what is left — a positioned place with no coords row and a cached resolver of
+// 'search' — is exactly the set the row renders a "Guessed" badge for. If these
+// two drifted, the list would hold places whose rows claim to be certain.
+const isGuessed = sql`${hasPosition}
+  and ${placeCoords.lat} is null
+  and ${placeCache.resolver} = 'search'`;
 
 // The position a place is filtered on: the same coalesce the `lat`/`lng`
 // columns use, so a place is inside the "near me" box exactly when the pin the
@@ -201,6 +216,30 @@ export async function loadListSummaries(
     });
   }
 
+  // The pins that were guessed at. Above "No coordinates" and below the real
+  // lists: a guessed place is on the map and might be wrong, which is a milder
+  // problem than not being on it at all.
+  //
+  // Same dedupe as the others: one place saved to three lists is one pin to
+  // check, not three.
+  const [{ count: guessedCount }] = await db
+    .select({
+      count: sql<number>`count(distinct coalesce(${places.mapsUrl}, ${places.id}))::int`,
+    })
+    .from(places)
+    .leftJoin(placeCache, eq(places.cacheKey, placeCache.key))
+    .leftJoin(placeCoords, eq(places.cid, placeCoords.cid))
+    .innerJoin(lists, eq(places.listId, lists.id))
+    .where(and(eq(lists.userId, userId), eq(lists.hidden, false), isGuessed));
+
+  if (guessedCount > 0) {
+    summaries.push({
+      id: GUESSED_LIST_ID,
+      name: GUESSED_LIST_NAME,
+      count: guessedCount,
+    });
+  }
+
   // A place with no coordinates is on no map, and a place on no map is one the
   // user never sees — so it can never be reported as wrong, and would sit
   // unlocated forever. Gathering them into one list at the bottom is what makes
@@ -245,6 +284,9 @@ async function listPlaces(
   // The unlocated list ignores `near`: nothing in it has a position, so any box
   // would empty it. It is also small, which is why it never needed one.
   if (listId === UNLOCATED_LIST_ID) return unlocatedPlaces(db, userId);
+  // The guessed list does honour `near`: unlike the unlocated one everything in
+  // it has a position, so it is a set of pins like any other list's.
+  if (listId === GUESSED_LIST_ID) return guessedPlaces(db, userId, near);
 
   const owned = await db
     .select({ id: lists.id })
@@ -292,6 +334,35 @@ async function everyPlace(
     const place = { ...row, queued: row.queued ?? false };
     // The same place saved to three lists is one pin, not three stacked on the
     // same spot. Same key as the unlocated list, for the same reason.
+    const key = place.mapsUrl ?? place.id;
+    if (!seen.has(key)) seen.set(key, place);
+  }
+  return [...seen.values()].sort((a, b) => a.title.localeCompare(b.title));
+}
+
+// The built-in list of pins a text search chose, assembled across all of the
+// user's non-hidden lists. These are on the map; what is in doubt is whether
+// they are on the right spot.
+async function guessedPlaces(
+  db: Db,
+  userId: string,
+  near?: NearFilter,
+): Promise<PlaceView[]> {
+  const rows = await placeRowQuery(db)
+    .innerJoin(lists, eq(places.listId, lists.id))
+    .where(
+      and(
+        eq(lists.userId, userId),
+        eq(lists.hidden, false),
+        isGuessed,
+        withinNear(near),
+      ),
+    );
+
+  const seen = new Map<string, PlaceView>();
+  for (const row of rows) {
+    const place = { ...row, queued: row.queued ?? false };
+    // The same place in three lists is one pin to check, not three.
     const key = place.mapsUrl ?? place.id;
     if (!seen.has(key)) seen.set(key, place);
   }
