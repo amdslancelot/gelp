@@ -17,6 +17,7 @@ import {
 } from "@/lib/humanize";
 import { GROUPS, groupOf, tier1Of } from "@/lib/category-tree";
 import FlagButton from "./FlagButton";
+import OpenInMapsButton from "./OpenInMapsButton";
 import { useMyLocation } from "./use-my-location";
 import { DEFAULT_NEAR_RADIUS_KM } from "@/lib/geo";
 import { radiusFromUrl } from "./use-my-location";
@@ -556,7 +557,7 @@ export default function Browser({
               <li key={p.id} className="relative">
                 <button
                   onClick={() => selectPlace(p)}
-                  className={`block w-full px-4 py-3 text-left hover:bg-neutral-50 ${
+                  className={`block min-h-[4.25rem] w-full px-4 py-3 text-left hover:bg-neutral-50 ${
                     focus?.id === p.id ? "bg-neutral-50" : ""
                   }`}
                 >
@@ -595,7 +596,7 @@ export default function Browser({
                     )}
                   </div>
                   {p.address && (
-                    <div className="mt-0.5 text-xs text-neutral-500">
+                    <div className="mt-0.5 pr-10 text-xs text-neutral-500">
                       {p.address}
                     </div>
                   )}
@@ -603,29 +604,33 @@ export default function Browser({
                       was and the list is a record of what was saved. Saying so
                       is the whole fix: nothing else about the row differs. */}
                   {p.closed && (
-                    <div className="mt-0.5 text-xs font-medium text-emerald-800">
+                    <div className="mt-0.5 pr-10 text-xs font-medium text-emerald-800">
                       {p.closed === "permanently"
                         ? "Permanently closed"
                         : "Temporarily closed"}
                     </div>
                   )}
                   {p.note && (
-                    <div className="mt-1 text-sm text-neutral-600">{p.note}</div>
+                    <div className="mt-1 pr-10 text-sm text-neutral-600">{p.note}</div>
                   )}
                 </button>
-                {/* Offered where it can actually help: on a pin that exists but
-                    may be wrong, and on a place nothing could locate. Never on
-                    a saved shirt, or on one already queued. */}
-                {((unplaced && reason.flaggable) ||
-                  (!unplaced && p.resolver === "search")) && (
-                  <div className="pointer-events-none absolute bottom-2 right-3">
+                {/* The row's corner controls. `pointer-events-none` on the
+                    strip so the parts of it that are empty stay part of the
+                    row, and pressing there still selects the place. */}
+                <div className="pointer-events-none absolute bottom-2 right-3 flex items-center gap-2">
+                  {/* Offered where it can actually help: on a pin that exists
+                      but may be wrong, and on a place nothing could locate.
+                      Never on a saved shirt, or on one already queued. */}
+                  {((unplaced && reason.flaggable) ||
+                    (!unplaced && p.resolver === "search")) && (
                     <FlagButton
                       mapsUrl={p.mapsUrl}
                       title={p.title}
                       className="pointer-events-auto"
                     />
-                  </div>
-                )}
+                  )}
+                  <OpenInMapsButton place={p} className="pointer-events-auto" />
+                </div>
               </li>
             );
           })}

@@ -78,3 +78,45 @@ export function unlocatedReason(p: PlaceView): UnlocatedReason {
   if (p.status === "unavailable") return "retrying";
   return "missing";
 }
+
+// The place's page on Google Maps. The URL saved by Takeout is the real pin,
+// so it is preferred; a coordinate search is the fallback for a place that was
+// only ever located by the Places API. Null when there is neither — a saved
+// shopping item, or one nothing could place.
+//
+// Kept here rather than in a component because both the map popup and the list
+// row open the same place, and two builders would eventually disagree.
+export function googleMapsUrlFor(place: PlaceView): string | null {
+  if (place.mapsUrl) return place.mapsUrl;
+  if (place.lat != null && place.lng != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}`;
+  }
+  return null;
+}
+
+// The same destination addressed to the Google Maps iOS app directly, via its
+// URL scheme. Only iOS needs this: an https maps link is a universal link that
+// Android hands to the app on its own, whereas Chrome on iOS keeps it and opens
+// a web page — which is the whole thing this button exists to avoid.
+//
+// The place is named, not just located. Coordinates alone open the app on a
+// dropped pin: the right spot, but no name, no hours, no reviews — not the
+// place's own card. The scheme has no parameter that takes a place id or a CID,
+// so the only way to ask for the place itself is to search its name; `center`
+// pins that search to where we already know it is, so a chain with fifty
+// branches resolves to this one, and a single match opens its card directly.
+//
+// Coordinates remain the fallback for a place with no usable title.
+export function googleMapsAppUrlFor(place: PlaceView): string | null {
+  const hasCoords = place.lat != null && place.lng != null;
+  const title = place.title.trim();
+
+  if (title) {
+    const q = `q=${encodeURIComponent(title)}`;
+    return hasCoords
+      ? `comgooglemaps://?${q}&center=${place.lat},${place.lng}&zoom=17`
+      : `comgooglemaps://?${q}`;
+  }
+  if (hasCoords) return `comgooglemaps://?q=${place.lat},${place.lng}`;
+  return null;
+}

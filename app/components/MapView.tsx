@@ -17,6 +17,7 @@ import "leaflet/dist/leaflet.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css";
 import type { PlaceView } from "@/lib/queries";
+import { googleMapsUrlFor } from "@/lib/place-view";
 import type { MyLocation } from "./use-my-location";
 
 // The map's current viewport, reported to the parent as plain numbers so the
@@ -53,16 +54,6 @@ interface MapViewProps {
   // Where the user is. Owned by the parent because the first fetch is aimed at
   // it — see `use-my-location`.
   location: MyLocation;
-}
-
-// The saved Takeout URL is the real Google Maps pin; fall back to a
-// coordinate search when a place was only resolved via the Places API.
-function googleMapsUrlFor(place: PlaceView): string | null {
-  if (place.mapsUrl) return place.mapsUrl;
-  if (place.lat != null && place.lng != null) {
-    return `https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}`;
-  }
-  return null;
 }
 
 // Frame the map once, to the first set of markers it is given. Framing is
