@@ -32,7 +32,7 @@ Everything lives in one GCP project (create one at <https://console.cloud.google
 ## 2. Getting your Takeout export
 
 1. Go to <https://takeout.google.com>, deselect all, select only **Saved** (your Maps saved lists), and export.
-2. **Manual path:** download the zip and upload it on Gelp's `/import` page. The upload is a dry run first: `POST /api/import/analyze` reads the zip and reports what importing it would do — how many places are already known exactly, how many are cached (and how many of those were merely a search's guess), how many would go on the resolve queue, how many Google no longer has an entry for, and which stored lists would be **deleted** — without writing anything or spending an API call. The import only runs when you pick a mode on that summary. The zip is uploaded again at that point rather than held server-side, so nothing has to be stored between the two requests.
+2. **Manual path:** download the zip and upload it on Gelp's `/import` page. The upload is a dry run first: `POST /api/import/analyze` reads the zip and reports what importing it would do — how many places are already known exactly, how many are cached (and how many of those were merely a search's guess), how many would go on the resolve queue, how many Google no longer has an entry for, and which stored lists would be **marked expired** — without writing anything or spending an API call. The import only runs when you pick a mode on that summary. The zip is uploaded again at that point rather than held server-side, so nothing has to be stored between the two requests.
 3. **From Drive:** if Takeout delivered to Drive, connect it once on the **Settings** page. The import page then offers **Import from Google Drive** beside the drop zone: Google's own file picker opens, you point at the `.zip`, and the rest — the dry run, the mode buttons, the progress bar — is the same as an upload, because it is the same import. The zip simply never touches a disk.
 
    The scope is `drive.file`, which is **per-file**: Gelp can read the file you hand it and nothing else in your Drive. That is also why this is a button rather than a nightly job — an export Takeout writes next month is a file nobody has picked, and picking needs a person in front of a browser.
@@ -43,9 +43,24 @@ wholesale rather than duplicating the list — even if an upload and the nightly
 sync overlap. Each list is swapped in a single transaction, so an import that
 dies partway rolls back to what was there before instead of leaving a list
 half-filled. A Takeout export is a complete snapshot, so a list missing from it
-was deleted in Google Maps and is deleted here too — with one guard: an export
-that parses to zero lists deletes nothing, since a broken download must not be
-read as "the account is empty now".
+was deleted in Google Maps — but here it is **kept**, renamed `[expired] <name>`
+and sorted to the bottom of the sidebar, places and notes intact. Deleting one
+is a button beside it, and the server refuses that delete for any list without
+the prefix. One guard: an export that parses to zero lists marks nothing, since
+a broken download must not be read as "the account is empty now".
+
+### One-command sync from Google Maps
+
+`npm run sync:maps` (on a laptop, never in the cluster) requests a Takeout
+export of **Saved** + **Maps (your places)** — not My Maps, whose `.kmz` files
+nothing here reads — waits for it, downloads it, imports it into prod, and runs
+`queue:resolve`. It drives your installed Chrome with a profile of its own in
+`data/chrome-profile/` (sign in once, by hand); before clicking on each Takeout
+page it asks the Claude Code CLI (`claude -p`) whether the expected buttons are
+still there, and stops without clicking if not. The prod write goes through
+`scripts/db-target.sh`, so it asks for `yes` in a real terminal.
+`scripts/takeout-export.py --download-only` fetches the newest finished export
+without requesting a new one.
 
 The place cache means an already-seen place costs zero API calls. A place the
 API cannot resolve is cached too, so a miss is not re-billed on every import,

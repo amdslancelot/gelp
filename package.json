@@ -13,7 +13,8 @@
     "db:migrate-data": "tsx scripts/migrate-sqlite-to-pg.ts",
     "selfcheck": "tsx scripts/selfcheck.ts",
     "queue:dump": "tsx scripts/dump-queue.ts",
-    "queue:resolve": "tsx scripts/dump-queue.ts && python3 scripts/resolve-cids.py --input data/queue.jsonl && tsx scripts/load-resolved.ts data/place-coords.jsonl --apply"
+    "queue:resolve": "tsx scripts/dump-queue.ts && python3 scripts/resolve-cids.py --input data/queue.jsonl && tsx scripts/load-resolved.ts data/place-coords.jsonl --apply",
+    "sync:maps": "bash scripts/sync-maps.sh"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",

@@ -93,13 +93,6 @@ export default async function ImportPage({
             <li className="flex gap-2">
               <span className="text-neutral-400">✓</span>
               <span>
-                <span className="font-medium text-neutral-800">My Maps</span> —
-                any custom maps you created
-              </span>
-            </li>
-            <li className="flex gap-2">
-              <span className="text-neutral-400">✓</span>
-              <span>
                 <span className="font-medium text-neutral-800">Saved</span> —
                 your lists (Favorites, Want to go, and more)
               </span>
