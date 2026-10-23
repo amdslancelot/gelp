@@ -37,6 +37,7 @@ export default async function Home() {
         initialPlaces={initialPlaces}
         initialListId={preload?.id ?? null}
         placesUrl="/api/lists/{id}/places"
+        canDelete
       />
     </div>
   );

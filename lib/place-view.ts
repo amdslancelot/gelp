@@ -40,6 +40,17 @@ export interface PlaceView {
 // The places for whichever list is open are loaded on their own, because
 // carrying all of them into every page load meant serialising every place in
 // the account — thousands of them — to render one screenful.
+// What a list missing from an export is renamed to start with. It is kept
+// rather than deleted: the export is Google's word that the list is gone, but
+// the places and notes in it are still worth having, and a rename can be undone
+// where a delete cannot. Deleting one is left to the owner, by hand — see
+// DELETE /api/lists/[id], which refuses any list without this prefix.
+export const EXPIRED_PREFIX = "[expired] ";
+
+export function isExpiredListName(name: string): boolean {
+  return name.startsWith(EXPIRED_PREFIX);
+}
+
 export interface ListSummary {
   id: string;
   name: string;

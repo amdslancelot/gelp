@@ -10,7 +10,7 @@ interface ImportResult {
   places: number;
   cacheHits: number;
   apiCalls: number;
-  listsRemoved: number;
+  listsExpired: number;
   queued: number;
   gone: number;
 }
@@ -416,7 +416,7 @@ export default function Uploader({
             <Stat label="Known" value={result.cacheHits} />
             <Stat label="Looked up" value={result.apiCalls} />
             {/* Lists the export no longer has, deleted to match it. */}
-            <Stat label="Removed" value={result.listsRemoved} />
+            <Stat label="Expired" value={result.listsExpired} />
           </div>
           {result.queued > 0 && (
             <p className="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -600,34 +600,26 @@ function AnalysisPanel({
         of these before you confirm.
       </p>
 
-      {/* A heavier border than the Dropped panel above, deliberately: both are
-          red, but only this one destroys something. */}
+      {/* Amber, not red: nothing is destroyed, but the lists change name. */}
       {analysis.removed.length > 0 && (
-        <div className="mt-4 rounded-lg border-2 border-red-400 bg-red-50 px-4 py-3">
-          <p className="text-sm font-semibold text-red-800">
+        <div className="mt-4 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-semibold text-amber-800">
             {analysis.removed.length} list
-            {analysis.removed.length === 1 ? "" : "s"} would be deleted
+            {analysis.removed.length === 1 ? "" : "s"} would be marked expired
           </p>
-          <p className="mt-1 text-xs leading-relaxed text-red-700">
+          <p className="mt-1 text-xs leading-relaxed text-amber-700">
             A Takeout export is a complete snapshot, so a list missing from it
-            was deleted in Google Maps and is deleted here too — along with{" "}
-            {analysis.removed
-              .reduce((n, l) => n + l.places, 0)
-              .toLocaleString()}{" "}
-            place
-            {analysis.removed.reduce((n, l) => n + l.places, 0) === 1
-              ? ""
-              : "s"}{" "}
-            and their notes.
+            was deleted in Google Maps. Here it is kept, places and notes
+            included, renamed to start with &ldquo;[expired]&rdquo;.
           </p>
           <ul className="mt-2 space-y-1">
             {analysis.removed.map((l) => (
               <li
                 key={l.name}
-                className="flex items-baseline justify-between gap-3 text-xs text-red-800"
+                className="flex items-baseline justify-between gap-3 text-xs text-amber-800"
               >
                 <span className="truncate">{l.name}</span>
-                <span className="shrink-0 tabular-nums text-red-600">
+                <span className="shrink-0 tabular-nums text-amber-600">
                   {l.places.toLocaleString()}
                 </span>
               </li>
@@ -780,13 +772,7 @@ function Term({
 
 // The operator between two terms. Purely typographic, so it is hidden from
 // screen readers rather than read out as part of the label.
-function Plus({
-  sign = "+",
-  tone = "green",
-}: {
-  sign?: string;
-  tone?: Tone;
-}) {
+function Plus({ sign = "+", tone = "green" }: { sign?: string; tone?: Tone }) {
   return (
     <div
       aria-hidden

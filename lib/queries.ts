@@ -14,6 +14,7 @@ import {
   ALL_PLACES_LIST_ID,
   ALL_PLACES_LIST_NAME,
   GUESSED_LIST_ID,
+  isExpiredListName,
   GUESSED_LIST_NAME,
   UNLOCATED_LIST_ID,
   UNLOCATED_LIST_NAME,
@@ -187,9 +188,14 @@ export async function loadListSummaries(
     .where(and(eq(lists.userId, userId), eq(lists.hidden, false)))
     .groupBy(lists.id, lists.name);
 
-  const summaries = rows.sort(
+  // Expired lists — gone from Google, kept here until deleted — are split off
+  // and go last of all, below even the built-in lists: they are history, not
+  // something to browse or fix.
+  const sorted = rows.sort(
     (a, b) => listRank(a.name) - listRank(b.name) || a.name.localeCompare(b.name),
   );
+  const summaries = sorted.filter((r) => !isExpiredListName(r.name));
+  const expired = sorted.filter((r) => isExpiredListName(r.name));
 
   // Every placed place in the account, gathered above the real lists. Google's
   // export splits the same place across "Want to go", "Favorites" and whatever
@@ -267,6 +273,7 @@ export async function loadListSummaries(
     });
   }
 
+  summaries.push(...expired);
   return summaries;
 }
 

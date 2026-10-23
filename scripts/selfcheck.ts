@@ -21,6 +21,7 @@ import {
   queueSummary,
   runImport,
   UNAVAILABLE_TTL_MS,
+  EXPIRED_PREFIX,
 } from "../lib/import";
 import { selectCandidate } from "../lib/places";
 import type {
@@ -88,10 +89,7 @@ class StubPlacesClient implements PlacesClient {
     private outcome: "ok" | "not_found" | "unavailable" | "throw" = "ok",
   ) {}
 
-  async searchText(
-    query: string,
-    opts?: SearchOptions,
-  ): Promise<PlaceLookup> {
+  async searchText(query: string, opts?: SearchOptions): Promise<PlaceLookup> {
     this.calls += 1;
     this.seen.push(opts);
     if (this.outcome === "throw") throw new Error("stub blew up mid-import");
@@ -119,10 +117,7 @@ class GazetteerPlacesClient implements PlacesClient {
   calls = 0;
   constructor(private readonly byQuery: Record<string, PlaceResult[]>) {}
 
-  async searchText(
-    query: string,
-    opts?: SearchOptions,
-  ): Promise<PlaceLookup> {
+  async searchText(query: string, opts?: SearchOptions): Promise<PlaceLookup> {
     this.calls += 1;
     const candidates = this.byQuery[query] ?? [];
     const chosen = selectCandidate(candidates, opts);
@@ -317,7 +312,10 @@ async function main() {
   else process.env.DRIVE_TOKEN_KEY = realKey;
 
   assert(secretEquals("abc", "abc"), "secretEquals matches equal secrets");
-  assert(!secretEquals("abc", "abd"), "secretEquals rejects a different secret");
+  assert(
+    !secretEquals("abc", "abd"),
+    "secretEquals rejects a different secret",
+  );
   assert(
     !secretEquals("abc", "abcd"),
     "secretEquals rejects a differing length without throwing",
@@ -369,8 +367,9 @@ async function main() {
     "coordinates read from an @lat,lng viewport anchor",
   );
   assert(
-    coordsFromMapsUrl("https://www.google.com/maps/place/X/data=!3d35.68!4d139.76")
-      ?.lng === 139.76,
+    coordsFromMapsUrl(
+      "https://www.google.com/maps/place/X/data=!3d35.68!4d139.76",
+    )?.lng === 139.76,
     "coordinates read from a !3d/!4d data blob",
   );
   assert(
@@ -430,7 +429,10 @@ async function main() {
     "a saved shopping item is not a place and is never looked up",
   );
   assert(
-    !isPlaceEntry({ title: "Ryuichi Sakamoto: Coda", mapsUrl: "https://www.google.com" }),
+    !isPlaceEntry({
+      title: "Ryuichi Sakamoto: Coda",
+      mapsUrl: "https://www.google.com",
+    }),
     "a saved film pointing at bare google.com is not a place either",
   );
 
@@ -447,7 +449,10 @@ async function main() {
       point: { lat: GRONINGEN.lat, lng: GRONINGEN.lng },
     },
   ]);
-  assert(centers.length === 1, `one region reached consensus, got ${centers.length}`);
+  assert(
+    centers.length === 1,
+    `one region reached consensus, got ${centers.length}`,
+  );
   assert(
     centers[0] !== undefined &&
       haversineMeters(centers[0].point, { lat: 35.68, lng: 139.74 }) < 20_000,
@@ -611,7 +616,10 @@ async function main() {
     };
     const down = new StubPlacesClient("unavailable");
     const outage = await runImport(db, outageUser, csvOnly, down, "upload");
-    assert(outage.apiCalls === 2, `outage import made 2 calls, got ${outage.apiCalls}`);
+    assert(
+      outage.apiCalls === 2,
+      `outage import made 2 calls, got ${outage.apiCalls}`,
+    );
 
     const stillDown = await runImport(db, outageUser, csvOnly, down, "upload");
     assert(
@@ -673,43 +681,58 @@ async function main() {
       `the list kept its 2 places after the failed import, got ${survivors.length}`,
     );
 
-    // 8. A list the export no longer contains is deleted — but an export that
-    //    parsed to nothing deletes nothing.
-    console.log("\nRemoved lists:");
+    // 8. A list the export no longer contains is kept but marked expired —
+    //    once, not again on every import — and an export that parsed to
+    //    nothing marks nothing.
+    console.log("\nExpired lists:");
     const shrunk = {
       lists: parsed.lists.filter((l) => l.name !== "Want to go"),
     };
     const pruned = await runImport(db, userId, shrunk, client, "upload");
     assert(
-      pruned.listsRemoved === 1,
-      `dropped list removed, got ${pruned.listsRemoved}`,
+      pruned.listsExpired === 1,
+      `dropped list marked expired, got ${pruned.listsExpired}`,
     );
     const remaining = await db
       .select()
       .from(schema.lists)
       .where(eq(schema.lists.userId, userId));
-    assert(remaining.length === 2, `2 lists remain, got ${remaining.length}`);
-    const orphans = await db
+    assert(remaining.length === 3, `all 3 lists kept, got ${remaining.length}`);
+    assert(
+      remaining.some((l) => l.name === `${EXPIRED_PREFIX}Want to go`),
+      `the dropped list is renamed, got ${remaining.map((l) => l.name).join(", ")}`,
+    );
+    const kept = await db
       .select()
       .from(schema.places)
       .where(eq(schema.places.userId, userId));
     assert(
-      orphans.length === 5,
-      `the removed list's 3 places went with it, got ${orphans.length} left`,
+      kept.length === 8,
+      `the expired list keeps its places, got ${kept.length} in all`,
+    );
+
+    const reimported = await runImport(db, userId, shrunk, client, "upload");
+    assert(
+      reimported.listsExpired === 0,
+      `an expired list is not marked twice, got ${reimported.listsExpired}`,
     );
 
     const empty = await runImport(db, userId, { lists: [] }, client, "upload");
     assert(
-      empty.listsRemoved === 0,
-      `an empty export removes nothing, got ${empty.listsRemoved}`,
+      empty.listsExpired === 0,
+      `an empty export marks nothing, got ${empty.listsExpired}`,
     );
     const afterEmpty = await db
       .select()
       .from(schema.lists)
       .where(eq(schema.lists.userId, userId));
     assert(
-      afterEmpty.length === 2,
-      `2 lists survive an empty export, got ${afterEmpty.length}`,
+      afterEmpty.every(
+        (l) => !l.name.startsWith(`${EXPIRED_PREFIX}${EXPIRED_PREFIX}`),
+      ) &&
+        afterEmpty.filter((l) => l.name.startsWith(EXPIRED_PREFIX)).length ===
+          1,
+      `an empty export expires nothing more, got ${afterEmpty.map((l) => l.name).join(", ")}`,
     );
 
     // 9. A place repeated inside one list is resolved once. The prefetched
@@ -899,7 +922,14 @@ async function main() {
     const authoritative = await runImport(
       db,
       coordsUser,
-      { lists: [{ name: "One", places: [{ title: "zondag", mapsUrl: tokyoUrl("1") }] }] },
+      {
+        lists: [
+          {
+            name: "One",
+            places: [{ title: "zondag", mapsUrl: tokyoUrl("1") }],
+          },
+        ],
+      },
       wouldGuess,
       "upload",
     );
@@ -1156,7 +1186,10 @@ async function main() {
     // 14. Share links: one per user, revocable, and scoped to their owner.
     console.log("\nShare links:");
     const token = await ensureShare(db, userId);
-    assert(token.length >= 32, `token is long enough, got ${token.length} chars`);
+    assert(
+      token.length >= 32,
+      `token is long enough, got ${token.length} chars`,
+    );
     assert(
       (await ensureShare(db, userId)) === token,
       "asking again returns the same link rather than breaking the old one",
@@ -1219,7 +1252,10 @@ async function main() {
       tier1Of("okonomiyaki_restaurant") === "restaurant" && !isPlaced("okonomiyaki_restaurant"),
       "an unknown category falls back by suffix and is reported as unplaced",
     );
-    assert(tier1Of("shed_thing") === "other", "an unrecognisable category lands in other");
+    assert(
+      tier1Of("shed_thing") === "other",
+      "an unrecognisable category lands in other",
+    );
 
     // The group layer is the same hand-written data one level up, and has the
     // same failure: an umbrella nobody assigned silently lands in Services,

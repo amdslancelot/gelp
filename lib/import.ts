@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { Db } from "./db";
+import { EXPIRED_PREFIX } from "./place-view";
 import {
   lists,
   placeCache,
@@ -32,8 +33,9 @@ export interface ImportResult {
   places: number;
   cacheHits: number;
   apiCalls: number;
-  // Lists deleted because the export no longer contains them.
-  listsRemoved: number;
+  // Lists kept but renamed with EXPIRED_PREFIX, because the export no longer
+  // contains them.
+  listsExpired: number;
   // Places put on the resolve queue rather than guessed at.
   queued: number;
   // Places a queued import skipped because their Google id is dead. Resolving
@@ -502,6 +504,10 @@ export interface ListAnalysis {
 }
 
 // A stored list the export no longer contains, which importing would delete.
+// Defined in place-view, which the browser can import; re-exported here because
+// this is where lists acquire it.
+export { EXPIRED_PREFIX };
+
 export interface RemovedList {
   name: string;
   places: number;
@@ -511,7 +517,7 @@ export interface RemovedList {
 // or asking Google anything.
 export interface ImportAnalysis {
   lists: ListAnalysis[];
-  // Lists that would be deleted, because a Takeout export is a complete
+  // Lists that would be marked expired, because a Takeout export is a complete
   // snapshot and anything missing from it was deleted in Google Maps.
   removed: RemovedList[];
   // Counted over *distinct* places, not over the export's rows: a place saved
@@ -571,7 +577,10 @@ export async function analyzeImport(
   const cids = all.map((p) => cidFromMapsUrl(p.mapsUrl));
   const coords = await loadCoords(db, cids);
   const gone = await loadTombstones(db, cids);
-  const queued = await loadQueued(db, all.map((p) => p.mapsUrl));
+  const queued = await loadQueued(
+    db,
+    all.map((p) => p.mapsUrl),
+  );
   const existing = await loadExistingLists(db, userId);
 
   const bucketFor = (place: ParsedPlace): Bucket => {
@@ -659,7 +668,10 @@ export async function analyzeImport(
     parsed.lists.length === 0
       ? []
       : [...existing.entries()]
-          .filter(([name]) => !importedNames.has(name))
+          .filter(
+            ([name]) =>
+              !importedNames.has(name) && !name.startsWith(EXPIRED_PREFIX),
+          )
           .map(([name, places]) => ({ name, places }));
 
   // Guessed pins first: they are the ones that look answered and are not, so
@@ -709,7 +721,7 @@ export async function runImport(
     places: 0,
     cacheHits: 0,
     apiCalls: 0,
-    listsRemoved: 0,
+    listsExpired: 0,
     queued: 0,
     gone: 0,
   };
@@ -839,7 +851,10 @@ export async function runImport(
         // A place repeated inside one list is resolved once: the second
         // appearance shares the first's answer rather than paying for its own.
         result.apiCalls += 1;
-        lookups.set(key, await search(client, parsedPlace, anchors, regions[index]));
+        lookups.set(
+          key,
+          await search(client, parsedPlace, anchors, regions[index]),
+        );
       } else {
         result.cacheHits += 1;
       }
@@ -915,7 +930,10 @@ export async function runImport(
         // the place rather than pinning it where it plainly is not.
         retried.add(key);
         result.apiCalls += 1;
-        lookups.set(key, await search(client, parsedPlace, consensus, regions[index]));
+        lookups.set(
+          key,
+          await search(client, parsedPlace, consensus, regions[index]),
+        );
       }
     }
 
@@ -1057,22 +1075,51 @@ export async function runImport(
 
   // A Takeout "Saved" export is a complete snapshot, so a list the account
   // still has cannot be missing from it: anything left over here was deleted in
-  // Google Maps and is deleted here too. Its places go with it, by cascade.
+  // Google Maps. It is kept, renamed with EXPIRED_PREFIX, places and all. A list
+  // already marked is left alone, so it does not collect a second prefix on
+  // every import. Should the list come back in a later export it is created
+  // afresh under its own name, and the expired copy stays beside it.
   //
-  // The empty-export guard matters because this is the one destructive step
-  // that is not scoped to a named list. An export that parsed to nothing is
-  // overwhelmingly more likely to be a broken or half-downloaded zip than an
-  // account that genuinely deleted every list, and treating it as the latter
-  // would wipe the user's data on a bad download.
+  // The empty-export guard matters because this is the one step not scoped to
+  // a named list. An export that parsed to nothing is overwhelmingly more
+  // likely to be a broken or half-downloaded zip than an account that genuinely
+  // deleted every list, and marking everything expired on a bad download would
+  // bury the whole map under a prefix.
   const importedNames = parsed.lists.map((l) => l.name);
   if (importedNames.length > 0) {
-    const removed = await db
-      .delete(lists)
-      .where(
-        and(eq(lists.userId, userId), notInArray(lists.name, importedNames)),
-      )
-      .returning({ id: lists.id });
-    result.listsRemoved = removed.length;
+    await db.transaction(async (tx) => {
+      const stale = await tx
+        .select({ id: lists.id, name: lists.name })
+        .from(lists)
+        .where(
+          and(
+            eq(lists.userId, userId),
+            notInArray(lists.name, importedNames),
+            sql`${lists.name} not like ${EXPIRED_PREFIX + "%"}`,
+          ),
+        );
+      if (stale.length === 0) return;
+
+      // Names are unique per user, and an earlier expiry of a same-named list
+      // may already hold "[expired] X" — so the rename takes the first free
+      // "[expired] X", "[expired] X (2)", ….
+      const taken = new Set(
+        (
+          await tx
+            .select({ name: lists.name })
+            .from(lists)
+            .where(eq(lists.userId, userId))
+        ).map((r) => r.name),
+      );
+      for (const row of stale) {
+        const base = EXPIRED_PREFIX + row.name;
+        let name = base;
+        for (let n = 2; taken.has(name); n++) name = `${base} (${n})`;
+        taken.add(name);
+        await tx.update(lists).set({ name }).where(eq(lists.id, row.id));
+      }
+      result.listsExpired = stale.length;
+    });
   }
 
   return result;

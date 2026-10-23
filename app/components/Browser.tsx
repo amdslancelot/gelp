@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import {
   GUESSED_LIST_ID,
+  isExpiredListName,
   UNLOCATED_LIST_ID,
   unlocatedReason,
   type ListSummary,
@@ -120,6 +122,7 @@ export default function Browser({
   initialPlaces,
   initialListId,
   placesUrl,
+  canDelete = false,
 }: {
   lists: ListSummary[];
   // The places the page server-rendered, so the first screen costs no round
@@ -132,7 +135,11 @@ export default function Browser({
   // A template rather than a fixed path because a shared map reads through a
   // token-authorised route rather than the session one.
   placesUrl: string;
+  // Whether expired lists get a Delete button: the owner's own page only, never
+  // a shared map. The server checks ownership regardless.
+  canDelete?: boolean;
 }) {
+  const router = useRouter();
   const firstListId = lists[0]?.id ?? null;
   const [selectedListId, setSelectedListId] = useState<string | null>(
     firstListId,
@@ -186,10 +193,7 @@ export default function Browser({
   const [filterToView, setFilterToView] = useState(true);
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
   // Stable so MapView's bounds subscription isn't torn down on every render.
-  const handleBoundsChange = useCallback(
-    (b: MapBounds) => setMapBounds(b),
-    [],
-  );
+  const handleBoundsChange = useCallback((b: MapBounds) => setMapBounds(b), []);
   // Mobile-only view state: which pane is showing, and whether the lists drawer
   // is open. Both are inert at md+ where all three columns are visible at once.
   const [mobileTab, setMobileTab] = useState<"list" | "map">("list");
@@ -368,7 +372,8 @@ export default function Browser({
 
   // What actually reaches the DOM, and how much was held back.
   const shownPlaces = useMemo(
-    () => (showAllRows ? listedPlaces : listedPlaces.slice(0, ROWS_BEFORE_MORE)),
+    () =>
+      showAllRows ? listedPlaces : listedPlaces.slice(0, ROWS_BEFORE_MORE),
     [listedPlaces, showAllRows],
   );
   const heldBack = listedPlaces.length - shownPlaces.length;
@@ -385,6 +390,41 @@ export default function Browser({
     setLeaf(null);
     setShowAllRows(false);
   };
+
+  // Delete one expired list, after asking. The page's list summaries come from
+  // the server, so a refresh is what removes it from the sidebar; every cached
+  // list is dropped too, since "All Places" and the built-in lists held its
+  // places as well.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deleteList = useCallback(
+    async (list: ListSummary) => {
+      if (
+        !window.confirm(
+          `Delete "${list.name}" and its ${list.count} place${list.count === 1 ? "" : "s"}? This cannot be undone.`,
+        )
+      ) {
+        return;
+      }
+      setDeletingId(list.id);
+      try {
+        const res = await fetch(`/api/lists/${encodeURIComponent(list.id)}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          window.alert("Could not delete the list. Try again.");
+          return;
+        }
+        setPlacesByList({});
+        if (selectedListId === list.id) {
+          setSelectedListId(lists.find((l) => l.id !== list.id)?.id ?? null);
+        }
+        router.refresh();
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [lists, router, selectedListId],
+  );
 
   const selectList = (id: string) => {
     setSelectedListId(id);
@@ -450,6 +490,8 @@ export default function Browser({
           lists={lists}
           selectedListId={selectedListId}
           onSelect={selectList}
+          onDelete={canDelete ? deleteList : undefined}
+          deletingId={deletingId}
         />
       </aside>
 
@@ -727,6 +769,8 @@ export default function Browser({
               lists={lists}
               selectedListId={selectedListId}
               onSelect={selectList}
+              onDelete={canDelete ? deleteList : undefined}
+              deletingId={deletingId}
             />
           </aside>
         </div>
@@ -741,14 +785,20 @@ function ListItems({
   lists,
   selectedListId,
   onSelect,
+  onDelete,
+  deletingId,
 }: {
   lists: ListSummary[];
   selectedListId: string | null;
   onSelect: (id: string) => void;
+  // Set only where expired lists may be deleted; absent, no button is drawn.
+  onDelete?: (list: ListSummary) => void;
+  deletingId: string | null;
 }) {
   const firstBuiltIn = lists.findIndex(
     (l) => l.id === GUESSED_LIST_ID || l.id === UNLOCATED_LIST_ID,
   );
+  const firstExpired = lists.findIndex((l) => isExpiredListName(l.name));
 
   return (
     <ul className="pb-4">
@@ -763,38 +813,61 @@ function ListItems({
         // two read as one block rather than two separated sections.
         const opensBuiltIns =
           built && lists.findIndex((l) => l.id === list.id) === firstBuiltIn;
+        // Expired lists sit last, under a rule of their own, dimmed: kept for
+        // reference, not for browsing.
+        const expired = isExpiredListName(list.name);
+        const opensExpired =
+          expired && lists.findIndex((l) => l.id === list.id) === firstExpired;
         const selected = list.id === selectedListId;
         return (
           <li
             key={list.id}
             className={
-              opensBuiltIns ? "mt-2 border-t border-neutral-200 pt-2" : ""
+              opensBuiltIns || opensExpired
+                ? "mt-2 border-t border-neutral-200 pt-2"
+                : ""
             }
           >
-            <button
-              onClick={() => onSelect(list.id)}
-              className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm ${
-                selected
-                  ? built
-                    ? "bg-amber-50 font-medium text-amber-800"
-                    : "bg-emerald-50 font-medium text-emerald-900"
-                  : built
-                    ? "text-amber-700 hover:bg-amber-50"
-                    : "text-neutral-700 hover:bg-neutral-50"
-              }`}
-            >
-              <span className="flex min-w-0 items-center gap-1.5">
-                {built && <span aria-hidden>⚠</span>}
-                <span className="truncate">{displayListName(list.name)}</span>
-              </span>
-              <span
-                className={`ml-2 shrink-0 text-xs ${
-                  built ? "text-amber-600" : "text-neutral-400"
+            <div className="flex items-stretch">
+              <button
+                onClick={() => onSelect(list.id)}
+                className={`flex min-w-0 flex-1 items-center justify-between px-4 py-2 text-left text-sm ${
+                  selected
+                    ? built
+                      ? "bg-amber-50 font-medium text-amber-800"
+                      : "bg-emerald-50 font-medium text-emerald-900"
+                    : built
+                      ? "text-amber-700 hover:bg-amber-50"
+                      : expired
+                        ? "text-neutral-400 hover:bg-neutral-50"
+                        : "text-neutral-700 hover:bg-neutral-50"
                 }`}
               >
-                {list.count}
-              </span>
-            </button>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {built && <span aria-hidden>⚠</span>}
+                  <span className="truncate">{displayListName(list.name)}</span>
+                </span>
+                <span
+                  className={`ml-2 shrink-0 text-xs ${
+                    built ? "text-amber-600" : "text-neutral-400"
+                  }`}
+                >
+                  {list.count}
+                </span>
+              </button>
+              {/* A sibling, not inside the row's button: a button cannot hold
+                another, and this one must not also select the list. */}
+              {onDelete && isExpiredListName(list.name) && (
+                <button
+                  onClick={() => onDelete(list)}
+                  disabled={deletingId === list.id}
+                  title={`Delete ${list.name}`}
+                  className="shrink-0 px-3 text-xs text-red-600 hover:bg-red-50 disabled:text-neutral-300"
+                >
+                  {deletingId === list.id ? "…" : "Delete"}
+                </button>
+              )}
+            </div>
           </li>
         );
       })}
